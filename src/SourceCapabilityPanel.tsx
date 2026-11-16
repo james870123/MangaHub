@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { BookOpen, Image, Info, Play } from 'lucide-react';
 import { SOURCE_MANIFESTS, checkDirectImageUrls } from './sourceCapabilities';
 export default function SourceCapabilities({ onRead }: { onRead: (urls: string[]) => void }) {
@@ -19,7 +19,7 @@ export default function SourceCapabilities({ onRead }: { onRead: (urls: string[]
     <div className="notice"><Info size={20}/><div><b>直接圖片清單測試</b><p>每行貼上一個你有權存取的 HTTPS 圖片網址。這是使用者提供的資料，不會推測 ComicBox 的分段位址或繞過保護。</p></div></div>
     <textarea className="cap-textarea" value={text} onChange={e => setText(e.target.value)} rows={5} placeholder={'https://example.org/pages/001.jpg\nhttps://example.org/pages/002.webp'} aria-label="直接圖片網址清單"/>
     <p className="detailNote">可使用 {checked.urls.length} 張圖片{checked.errors.length ? `；${checked.errors.length} 筆網址未通過基本檢查` : ''}。副檔名檢查不代表圖片一定可公開讀取，實際載入錯誤會由 Reader 呈現。</p>
-    {checked.errors.length > 0 && <div className="error"><strong>無法接受的網址</strong>{checked.errors.slice(0, 5).map((error, index) => <p key={index}>{error}</p>)}</div>}
+    {checked.errors.length > 0 && <div className="error"><strong>無法接受的網址</strong>{checked.errors.slice(0, 5).map((error: string, index: number) => <p key={index}>{error}</p>)}</div>}
     <label className="cap-consent"><input type="checkbox" checked={confirmRights} onChange={e => setConfirmRights(e.target.checked)}/> 我確認有權使用這些圖片網址</label>
     <div className="diagnosticActions"><button className="primary" disabled={!confirmRights || checked.urls.length === 0 || checked.errors.length > 0} onClick={() => onRead(checked.urls)}><Play size={17}/> 在 MangaHub 閱讀 {checked.urls.length} 張</button></div>
   </section>;
