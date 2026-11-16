@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { BookOpen, Image, Info, Play } from 'lucide-react';
 import { SOURCE_MANIFESTS, checkDirectImageUrls } from './sourceCapabilities';
 export default function SourceCapabilities({ onRead }: { onRead: (urls: string[]) => void }) {
