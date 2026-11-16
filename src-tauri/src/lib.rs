@@ -79,9 +79,105 @@ fn parse_chapter(html: &str, target: &Url) -> ChapterInfo {
     }
 }
 
+
+// Diagnostics are intentionally limited to the known ComicBox image CDN.
+// No credentials, session cookies, challenge bypass or decryption is used.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImageProbe {
+    url: String,
+    http_status: u16,
+    content_type: String,
+    content_length: Option<u64>,
+    cors_header: String,
+    detected_format: String,
+    directly_renderable: bool,
+    sampled_bytes: usize,
+    explanation: String,
+}
+
+fn validate_image_probe_url(input: &str) -> Result<Url, String> {
+    let url = Url::parse(input).map_err(|_| "圖片網址格式錯誤".to_string())?;
+    if url.scheme() != "https"
+        || url.host_str() != Some("bmigmi-global-wuwu.ccavbox.com")
+        || url.port().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || !(url.path().starts_with("/break_2/static/upload/book/")
+            || url.path().starts_with("/break_avif/static/upload/book/"))
+    { return Err("僅允許 ComicBox 已知圖片 CDN 的 HTTPS 圖片路徑".into()); }
+    Ok(url)
+}
+
+fn classify_image_header(data: &[u8]) -> &'static str {
+    if data.starts_with(&[0xff, 0xd8, 0xff]) { return "JPEG"; }
+    if data.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]) { return "PNG"; }
+    if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" { return "WebP"; }
+    if data.len() >= 6 && (data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a")) { return "GIF"; }
+    if data.len() >= 16 && &data[4..8] == b"ftyp"
+        && (&data[8..12] == b"avif" || &data[8..12] == b"avis") { return "AVIF"; }
+    "未辨識的二進位資料"
+}
+
+#[command]
+async fn probe_comicbox_image(url: String) -> Result<ImageProbe, String> {
+    let target = validate_image_probe_url(&url)?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(12))
+        .user_agent("MangaHub/0.3.1 (image-format diagnostics)")
+        .build().map_err(|e| e.to_string())?;
+    let mut response = client.get(target.clone())
+        .header(reqwest::header::RANGE, "bytes=0-63")
+        .send().await.map_err(|e| format!("圖片來源連線失敗：{e}"))?;
+    let status = response.status().as_u16();
+    let headers = response.headers();
+    let content_type = headers.get(reqwest::header::CONTENT_TYPE)
+        .and_then(|h| h.to_str().ok()).unwrap_or("未提供").to_string();
+    let cors = headers.get(reqwest::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+        .and_then(|h| h.to_str().ok()).unwrap_or("未提供").to_string();
+    let length = response.content_length();
+    // Inspect only one response chunk, never save the content or reconstruct protected images.
+    let head = if (200..300).contains(&status) {
+        response.chunk().await.map_err(|e| format!("讀取資料標頭失敗：{e}"))?
+            .map(|chunk| chunk[..chunk.len().min(64)].to_vec()).unwrap_or_default()
+    } else { Vec::new() };
+    let format = classify_image_header(&head).to_string();
+    let recognized = format != "未辨識的二進位資料";
+    let renderable = (200..300).contains(&status) && recognized;
+    let explanation = if (300..400).contains(&status) {
+        "來源回傳重新導向；為避免跳轉到未知網域，診斷器不追蹤重新導向。"
+    } else if status == 403 {
+        "HTTP 403：來源拒絕此請求。診斷器不會重試或繞過存取限制。"
+    } else if !(200..300).contains(&status) {
+        "來源未回傳成功狀態，無法判斷圖片格式。"
+    } else if recognized {
+        "資料標頭符合一般圖片格式；這不代表第三方使用權或瀏覽器載入權限已獲確認。"
+    } else {
+        "資料標頭不是常見圖片格式；可能是網站專用分段或其他資料，不能直接交給圖片閱讀器。"
+    }.to_string();
+    Ok(ImageProbe { url: target.to_string(), http_status: status,
+        content_type, content_length: length, cors_header: cors,
+        detected_format: format, directly_renderable: renderable,
+        sampled_bytes: head.len(), explanation })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn probe_rejects_other_hosts_and_ports() {
+        assert!(validate_image_probe_url("https://127.0.0.1/break_avif/static/upload/book/1/2/3.b_0").is_err());
+        assert!(validate_image_probe_url("https://bmigmi-global-wuwu.ccavbox.com:444/break_avif/static/upload/book/1/2/3.b_0").is_err());
+        assert!(validate_image_probe_url("https://bmigmi-global-wuwu.ccavbox.com/not-allowed/1.jpg").is_err());
+    }
+    #[test]
+    fn image_signatures() {
+        assert_eq!(classify_image_header(&[0xff,0xd8,0xff,0x00]), "JPEG");
+        assert_eq!(classify_image_header(b"RIFFabcdWEBP123"), "WebP");
+        assert_eq!(classify_image_header(b"encrypted-chunk"), "未辨識的二進位資料");
+    }
     #[test]
     fn rejects_untrusted_hosts() {
         assert!(validate_chapter_url("https://www.comicbox.xyz.evil.test/free-chapter/123").is_err());
@@ -102,7 +198,7 @@ mod tests {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![inspect_comicbox_chapter])
+        .invoke_handler(tauri::generate_handler![inspect_comicbox_chapter, probe_comicbox_image])
         .run(tauri::generate_context!())
         .expect("error while running MangaHub");
 }
