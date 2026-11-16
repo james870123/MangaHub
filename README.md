@@ -1,56 +1,24 @@
-# MangaHub v0.1
+# MangaHub v0.3
 
-A clean, local-first manga reader prototype based on **Tauri 2 + React + TypeScript + Rust**. It is a standalone project inspired by the cross-platform HGhub build workflow, **not** a copy of its repository.
+Tauri 2 + React + TypeScript application. Version 0.3 adds a standalone clean-image reader while retaining ComicBox metadata and chapter navigation from v0.2.
 
-## Implemented
+## New in v0.3
 
-- ComicBox public chapter **metadata** inspection (title, chapter list, page node count) via Rust + reqwest + scraper.
-- Input security: HTTPS, exact allowlisted host and numeric chapter IDs, no redirects, response size cap.
-- Personal bookmarks stored in localStorage.
-- Clean vertical/single-page reader for direct HTTPS image URLs you have permission to use.
-- No third-party advertising scripts, browser embedding, or tracking SDK.
-- Windows GitHub Actions build: raw EXE plus NSIS installer.
+- Import image files (JPG/PNG/WebP/AVIF and other browser-supported formats) using **Select local images**. They remain local and are not uploaded. File selections are session-only.
+- Paste one HTTPS image URL per line. The application does not load source HTML, trackers or advertising scripts into the clean reader. Some sites reject cross-origin direct image requests.
+- Long vertical scroll, left-to-right single-page, and right-to-left single-page modes, with arrow-key navigation.
+- Preload neighboring images, report per-image load failures and permit retries; use the zoom control.
+- Remember URL-list reading progress and mode in local storage, up to 100 reading lists. No cloud sync.
+- ComicBox metadata chapter navigation continues to work, including the original-site fallback. **ComicBox image segmentation/encryption is NOT implemented.** This release does not bypass access control or remove ads from an embedded source website.
 
-## Intentionally not implemented
+## Build with GitHub Actions
 
-ComicBox's current image pipeline downloads chunked binary data and performs image processing in JavaScript. This project does **not** decrypt, descramble, bypass access controls, or claim that ComicBox images can be rendered as ordinary JPEGs. The source inspector only identifies HTML nodes; the standalone reader accepts user-supplied accessible image URLs.
+1. Replace your v0.2 repository root files using the PATCH archive, preserving directories.
+2. Commit and push to `main`.
+3. Run Actions → Build Windows MangaHub; download artifact.
+4. Open Image Reader, choose some images from disk, and test vertical and single-page modes.
+5. Paste direct, authorized HTTPS images and check failure/retry behavior if they are blocked by the source host.
 
-## Run locally (Windows)
+To build locally: `npm install`, `npm run build`, `npm run tauri build` (requires Tauri 2 prerequisites).
 
-Prerequisites: Node.js 22+, Rust stable (MSVC toolchain), Microsoft C++ Build Tools, WebView2 runtime.
-
-```powershell
-npm install
-npm run tauri dev
-```
-
-To build a Windows executable and installer:
-
-```powershell
-npm run tauri build
-```
-
-Outputs:
-- `src-tauri/target/release/mangahub.exe` (unpacked executable; WebView2 dependency, not a fully statically packaged app)
-- `src-tauri/target/release/bundle/nsis/*.exe` (installer)
-
-### GitHub Actions
-
-1. Create a new repository (recommended: `MangaHub`).
-2. Upload **the contents** of this folder to the repository root; use branch `main`.
-3. Go to **Actions → Build Windows MangaHub → Run workflow**.
-4. Download the output artifacts.
-
-## iOS
-
-The core Rust/React structure is compatible with the Tauri iOS pipeline, but **this v0.1 archive does not contain a working signed IPA workflow**. iOS needs a Mac/Xcode toolchain, an Apple signing team and matching provisioning profile/certificate. Start with `npx tauri ios init` on macOS before configuring a signed GitHub Actions build. Avoid claiming that unsigned builds can be sideloaded.
-
-## Technical notes
-
-- `src-tauri/src/lib.rs`: restricted ComicBox metadata parser and tests.
-- `src/main.tsx`: interface, library, user-supplied image URL reader.
-- `src/style.css`: responsive desktop/mobile dark UI.
-- `.github/workflows/windows.yml`: Windows CI build.
-- Browser-only `npm run dev` shows UI but cannot invoke Rust chapter inspection; use `npm run tauri dev` for live inspection.
-- No account synchronization: localStorage is per device. A separate sync feature would need explicit design.
-- Network inspection respects website policies; content rights and permitted usage must be checked for any source integration.
+**Verification:** Archive was created and inspected here. Full npm and Rust compilation could not be completed in this environment due to unavailable dependency installation. GitHub Actions will provide compilation validation.

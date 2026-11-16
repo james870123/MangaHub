@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { BookOpen, Bookmark, ExternalLink, RefreshCw, ChevronLeft, ChevronRight, CircleHelp, Globe2, Image, Library, Link, LoaderCircle, Plus, Search, Trash2 } from 'lucide-react';
 import './style.css';
+import Reader from './Reader';
 
 type Chapter = { id: string; title: string; url: string };
 type ChapterInfo = { title: string; url: string; chapterId: string; pages: number; chapters: Chapter[]; encryptedImagePipeline: boolean };
@@ -26,10 +27,6 @@ function App() {
   const [chapterLoading, setChapterLoading] = useState(false);
   const [cache, setCache] = useSaved<Record<string, CachedChapter>>('mh-chapter-cache-v02', {});
   const [books, setBooks] = useSaved<Book[]>('mh-books', []);
-  const [imageText, setImageText] = useSaved('mh-image-urls', '');
-  const [page, setPage] = useSaved('mh-page', 0);
-  const [vertical, setVertical] = useSaved('mh-vertical', true);
-  const images = imageText.split(/\r?\n/).map(s => s.trim()).filter(s => { try { const u = new URL(s); return u.protocol === 'https:'; } catch { return false; } });
   function chapterKey(input: string) {
     try {
       const parsed = new URL(input);
@@ -79,14 +76,14 @@ function App() {
       <button className={tab === 'source' ? 'nav active' : 'nav'} onClick={() => setTab('source')}><Search size={19}/> 來源解析</button>
       <button className={tab === 'library' ? 'nav active' : 'nav'} onClick={() => setTab('library')}><Library size={19}/> 我的書架 <span className="count">{books.length}</span></button>
       <button className={tab === 'reader' ? 'nav active' : 'nav'} onClick={() => setTab('reader')}><Image size={19}/> 圖片閱讀器</button>
-      <div className="asideFoot"><CircleHelp size={16}/> v0.2 · Local-first<br/><span>無原站廣告、無追蹤 SDK</span></div>
+      <div className="asideFoot"><CircleHelp size={16}/> v0.3 · Local-first<br/><span>無原站廣告、無追蹤 SDK</span></div>
     </aside>
     <main className="main">
       <header><span className="eyebrow"><Globe2 size={15}/> MangaHub / {tab === 'source' ? 'Source Inspector' : tab === 'library' ? 'My Library' : tab === 'chapter' ? 'Chapter' : 'Reader'}</span><span className="status">● Local-first</span></header>
       {tab === 'source' && <section className="content">
         <div className="pill">SOURCE ADAPTER · COMICBOX</div>
         <h1>探索漫畫，<br/><span>專注於閱讀。</span></h1>
-        <p className="lead">輸入 ComicBox 的公開章節網址，擷取章節名稱、導覽資訊和頁面數。v0.2 支援已解析章節快取、章節導覽及 HTTP 錯誤診斷；不處理受保護圖片。</p>
+        <p className="lead">輸入 ComicBox 的公開章節網址，擷取章節名稱、導覽資訊和頁面數。v0.3 支援已解析章節快取、章節導覽及 HTTP 錯誤診斷；不處理受保護圖片。</p>
         <form className="urlbox" onSubmit={e => { e.preventDefault(); void inspect(url); }}><Link size={20}/><input aria-label="章節網址" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://www.comicbox.xyz/free-chapter/…"/><button disabled={loading}>{loading ? <LoaderCircle className="spin" size={17}/> : <Search size={17}/>}<span>解析章節</span></button></form>
         {error && <div className="error"><strong>解析失敗</strong><p>{error}</p><small>已保留先前成功解析的章節索引。你也可以選擇以系統瀏覽器閱讀。</small></div>}
         {!info && <div className="startGrid"><div className="hint"><div className="hintIcon"><BookOpen/></div><b>章節資訊</b><p>解析標題與章節目錄</p></div><div className="hint"><div className="hintIcon"><Bookmark/></div><b>個人書架</b><p>將章節保存在本機</p></div><div className="hint"><div className="hintIcon"><Image/></div><b>純淨閱讀</b><p>使用自己的圖片網址閱讀</p></div></div>}
@@ -113,7 +110,7 @@ function App() {
         <p className="detailNote">來源網址：{active?.url || '尚未選擇'}。原站在外部瀏覽器開啟時，其廣告仍由原網站控制。</p>
       </section>}
       {tab === 'library' && <section className="content"><div className="pill">PERSONAL COLLECTION</div><h1>我的<span>書架</span></h1><p className="lead">收藏資料只儲存在這台裝置，不會上傳到伺服器。</p>{books.length === 0 ? <div className="empty"><Library size={36}/><h2>書架還是空的</h2><p>先到來源解析頁面，解析章節後即可收藏。</p><button onClick={() => setTab('source')} className="primary">前往來源解析</button></div> : <div className="bookGrid">{books.map(book => <div className="book" key={book.chapterId}><div className="bookCover"><BookOpen size={36}/></div><div className="bookInfo"><b>{book.title}</b><small>{book.pages} 個頁面節點</small><div className="bookActions"><button onClick={() => void openChapter({ id: book.chapterId, title: book.title, url: book.url })}>開啟章節</button><button aria-label="移除收藏" onClick={() => setBooks(p => p.filter(x => x.chapterId !== book.chapterId))}><Trash2 size={16}/></button></div></div></div>)}</div>}</section>}
-      {tab === 'reader' && <section className="content readerContent"><div className="pill">CLEAN READER</div><h1>圖片<span>閱讀器</span></h1><p className="lead">每行貼上一個你有權使用的 HTTPS 漫畫圖片網址（JPG、PNG、WebP 等）。這裡不載入第三方網頁或廣告。</p><textarea value={imageText} onChange={e => { setImageText(e.target.value); setPage(0); }} rows={4} placeholder={'https://example.org/page001.jpg\nhttps://example.org/page002.jpg'}/><div className="readerTools"><span>{images.length} 張圖片</span><div><button className={!vertical ? 'toggle on' : 'toggle'} onClick={() => setVertical(false)}>單頁</button><button className={vertical ? 'toggle on' : 'toggle'} onClick={() => setVertical(true)}>長條捲動</button></div></div>{images.length > 0 ? vertical ? <div className="scrollReader">{images.map((src, i) => <img key={`${src}-${i}`} src={src} loading={i < 2 ? 'eager' : 'lazy'} referrerPolicy="no-referrer" alt={`第 ${i + 1} 頁`} />)}</div> : <div className="singleReader"><div className="pager"><button disabled={page <= 0} onClick={() => setPage(p => p - 1)}><ChevronLeft/> 上一頁</button><span>{Math.min(page + 1, images.length)} / {images.length}</span><button disabled={page >= images.length - 1} onClick={() => setPage(p => p + 1)}>下一頁 <ChevronRight/></button></div><img src={images[Math.min(page, images.length - 1)]} referrerPolicy="no-referrer" alt={`第 ${page + 1} 頁`}/></div> : <div className="empty"><Image size={34}/><h2>等待圖片</h2><p>貼上可直接存取的圖片 URL 即可開始閱讀。</p></div>}</section>}
+      {tab === 'reader' && <Reader/>}
     </main>
   </div>;
 }
