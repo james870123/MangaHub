@@ -42,8 +42,8 @@ function ReaderImage({ src, index, eager, onVisible }: { src: string; index: num
   </div>;
 }
 
-export default function Reader() {
-  const [imageText, setImageText] = useState(() => safeRead(STORAGE_URLS, ''));
+export default function Reader({ initialUrls }: { initialUrls?: string[] }) {
+  const [imageText, setImageText] = useState(() => initialUrls?.join('\n') ?? safeRead(STORAGE_URLS, ''));
   const [mode, setMode] = useState<ReadingMode>(() => {
     const value = safeRead(STORAGE_MODE, 'vertical');
     return value === 'ltr' || value === 'rtl' ? value : 'vertical';

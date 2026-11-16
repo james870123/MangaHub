@@ -6,6 +6,8 @@ import { BookOpen, Bookmark, ExternalLink, RefreshCw, ChevronLeft, ChevronRight,
 import './style.css';
 import Reader from './Reader';
 import SourceDiagnostics from './SourceDiagnostics';
+import SourceCapabilities from './SourceCapabilities';
+import { sourceForUrl } from './sourceCapabilities';
 
 type Chapter = { id: string; title: string; url: string };
 type ChapterInfo = { title: string; url: string; chapterId: string; pages: number; chapters: Chapter[]; encryptedImagePipeline: boolean };
@@ -18,8 +20,11 @@ function useSaved<T>(key: string, initial: T): [T, React.Dispatch<React.SetState
 }
 const example = 'https://www.comicbox.xyz/free-chapter/42682?t=20260415';
 function App() {
-  const [tab, setTab] = useState<'source' | 'library' | 'reader' | 'chapter' | 'diagnostics'>('source');
+  const [tab, setTab] = useState<'source' | 'library' | 'reader' | 'chapter' | 'diagnostics' | 'capabilities'>('source');
   const [url, setUrl] = useState(example);
+  const [readerUrls, setReaderUrls] = useState<string[] | undefined>();
+  const [readerSession, setReaderSession] = useState(0);
+  function readDirectImages(urls: string[]) { setReaderUrls(urls); setReaderSession(n => n + 1); setTab('reader'); }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState<ChapterInfo | null>(null);
@@ -77,15 +82,16 @@ function App() {
       <button className={tab === 'source' ? 'nav active' : 'nav'} onClick={() => setTab('source')}><Search size={19}/> 來源解析</button>
       <button className={tab === 'library' ? 'nav active' : 'nav'} onClick={() => setTab('library')}><Library size={19}/> 我的書架 <span className="count">{books.length}</span></button>
       <button className={tab === 'reader' ? 'nav active' : 'nav'} onClick={() => setTab('reader')}><Image size={19}/> 圖片閱讀器</button>
+      <button className={tab === 'capabilities' ? 'nav active' : 'nav'} onClick={() => setTab('capabilities')}><Image size={19}/> 來源相容性</button>
       <button className={tab === 'diagnostics' ? 'nav active' : 'nav'} onClick={() => setTab('diagnostics')}><Globe2 size={19}/> 來源診斷</button>
-      <div className="asideFoot"><CircleHelp size={16}/> v0.3.2 · Local-first<br/><span>無原站廣告、無追蹤 SDK</span></div>
+      <div className="asideFoot"><CircleHelp size={16}/> v0.3.3 · Local-first<br/><span>無原站廣告、無追蹤 SDK</span></div>
     </aside>
     <main className="main">
-      <header><span className="eyebrow"><Globe2 size={15}/> MangaHub / {tab === 'source' ? 'Source Inspector' : tab === 'library' ? 'My Library' : tab === 'chapter' ? 'Chapter' : tab === 'diagnostics' ? 'Diagnostics' : 'Reader'}</span><span className="status">● Local-first</span></header>
+      <header><span className="eyebrow"><Globe2 size={15}/> MangaHub / {tab === 'source' ? 'Source Inspector' : tab === 'library' ? 'My Library' : tab === 'chapter' ? 'Chapter' : tab === 'diagnostics' ? 'Diagnostics' : tab === 'capabilities' ? 'Source Capabilities' : 'Reader'}</span><span className="status">● Local-first</span></header>
       {tab === 'source' && <section className="content">
         <div className="pill">SOURCE ADAPTER · COMICBOX</div>
         <h1>探索漫畫，<br/><span>專注於閱讀。</span></h1>
-        <p className="lead">輸入 ComicBox 的公開章節網址，擷取章節名稱、導覽資訊和頁面數。v0.3.2 支援已解析章節快取、章節導覽及 HTTP 錯誤診斷；不處理受保護圖片。</p>
+        <p className="lead">輸入 ComicBox 的公開章節網址，擷取章節名稱、導覽資訊和頁面數。v0.3.3 支援已解析章節快取、章節導覽及 HTTP 錯誤診斷；不處理受保護圖片。</p>
         <form className="urlbox" onSubmit={e => { e.preventDefault(); void inspect(url); }}><Link size={20}/><input aria-label="章節網址" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://www.comicbox.xyz/free-chapter/…"/><button disabled={loading}>{loading ? <LoaderCircle className="spin" size={17}/> : <Search size={17}/>}<span>解析章節</span></button></form>
         {error && <div className="error"><strong>解析失敗</strong><p>{error}</p><small>已保留先前成功解析的章節索引。你也可以選擇以系統瀏覽器閱讀。</small></div>}
         {!info && <div className="startGrid"><div className="hint"><div className="hintIcon"><BookOpen/></div><b>章節資訊</b><p>解析標題與章節目錄</p></div><div className="hint"><div className="hintIcon"><Bookmark/></div><b>個人書架</b><p>將章節保存在本機</p></div><div className="hint"><div className="hintIcon"><Image/></div><b>純淨閱讀</b><p>使用自己的圖片網址閱讀</p></div></div>}
@@ -103,17 +109,19 @@ function App() {
         {chapterLoading && <div className="notice"><LoaderCircle className="spin" size={20}/><div>正在取得這一話的公開章節資訊…</div></div>}
         {chapterError && <div className="error"><strong>網站回應錯誤</strong><p>{chapterError}</p><small>HTTP 403 表示原站拒絕本次請求，並非漫畫不存在；不會自動重試或繞過存取限制。</small></div>}
         {active && cache[active.id] && <div className="resultStats"><div><b>{cache[active.id].info.pages}</b><span>已快取的頁面節點</span></div><div><b>{cache[active.id].info.chapters.length}</b><span>章節連結</span></div><div><b>本機</b><span>資料索引來源</span></div></div>}
-        <div className="notice"><CircleHelp size={20}/><div><b>目前尚無法在 MangaHub 直接顯示此網站的漫畫圖片</b><p>這個來源的圖片經過分段與處理。v0.3.2 不會嘗試繞過保護；你可以用系統瀏覽器在原站正常閱讀，或使用「圖片閱讀器」讀取有權存取的直接圖片網址。</p></div></div>
+        <div className="notice"><CircleHelp size={20}/><div><b>目前尚無法在 MangaHub 直接顯示此網站的漫畫圖片</b><p>這個來源的圖片經過分段與處理。v0.3.3 不會嘗試繞過保護；你可以用系統瀏覽器在原站正常閱讀，或使用「圖片閱讀器」讀取有權存取的直接圖片網址。</p></div></div>
         <div className="diagnosticActions">
           {active && <button className="primary" onClick={() => void openOriginal(active.url)}><ExternalLink size={17}/> 使用 Edge／預設瀏覽器閱讀</button>}
           {active && <button className="secondaryButton" disabled={chapterLoading} onClick={() => void openChapter(active, true)}><RefreshCw size={17}/> 重新取得章節資訊</button>}
-          <button className="secondaryButton" onClick={() => setTab('reader')}><Image size={17}/> 開啟圖片閱讀器</button>
+          <button className="secondaryButton" onClick={() => setTab('capabilities')}><Image size={17}/> 查看來源能力／直接圖片</button>
         </div>
+        {active && <p className="detailNote">來源能力：{sourceForUrl(active.url).imageTransport === 'site-managed' ? '原站專用圖片處理，無法直接導入 Reader' : '可使用標準圖片來源'}。</p>}
         <p className="detailNote">來源網址：{active?.url || '尚未選擇'}。原站在外部瀏覽器開啟時，其廣告仍由原網站控制。</p>
       </section>}
       {tab === 'library' && <section className="content"><div className="pill">PERSONAL COLLECTION</div><h1>我的<span>書架</span></h1><p className="lead">收藏資料只儲存在這台裝置，不會上傳到伺服器。</p>{books.length === 0 ? <div className="empty"><Library size={36}/><h2>書架還是空的</h2><p>先到來源解析頁面，解析章節後即可收藏。</p><button onClick={() => setTab('source')} className="primary">前往來源解析</button></div> : <div className="bookGrid">{books.map(book => <div className="book" key={book.chapterId}><div className="bookCover"><BookOpen size={36}/></div><div className="bookInfo"><b>{book.title}</b><small>{book.pages} 個頁面節點</small><div className="bookActions"><button onClick={() => void openChapter({ id: book.chapterId, title: book.title, url: book.url })}>開啟章節</button><button aria-label="移除收藏" onClick={() => setBooks(p => p.filter(x => x.chapterId !== book.chapterId))}><Trash2 size={16}/></button></div></div></div>)}</div>}</section>}
+      {tab === 'capabilities' && <SourceCapabilities onRead={readDirectImages}/>}
       {tab === 'diagnostics' && <SourceDiagnostics/>}
-      {tab === 'reader' && <Reader/>}
+      {tab === 'reader' && <Reader key={readerSession} initialUrls={readerUrls}/>} 
     </main>
   </div>;
 }

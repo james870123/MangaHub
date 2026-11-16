@@ -1,6 +1,6 @@
 [package]
 name = "mangahub"
-version = "0.3.2"
+version = "0.3.3"
 description = "MangaHub reader"
 authors = ["MangaHub contributors"]
 edition = "2021"
