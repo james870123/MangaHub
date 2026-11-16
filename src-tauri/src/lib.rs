@@ -93,6 +93,9 @@ struct ImageProbe {
     detected_format: String,
     directly_renderable: bool,
     sampled_bytes: usize,
+    content_range: String,
+    resource_size: Option<u64>,
+    range_honored: bool,
     explanation: String,
 }
 
@@ -110,6 +113,28 @@ fn validate_image_probe_url(input: &str) -> Result<Url, String> {
     Ok(url)
 }
 
+fn resource_size_from_range(value: &str) -> Option<u64> {
+    // RFC 9110 Content-Range example: bytes 0-63/52352
+    let (unit_and_range, total) = value.split_once('/')?;
+    if !unit_and_range.starts_with("bytes ") { return None; }
+    if total == "*" { return None; }
+    total.parse::<u64>().ok()
+}
+
+fn paired_image_urls(url: &Url) -> Result<(Url, Url), String> {
+    let path = url.path();
+    let base = if let Some(base) = path.strip_suffix(".b_0") { base }
+               else if let Some(base) = path.strip_suffix(".b_1") { base }
+               else { return Err("請提供以 .b_0 或 .b_1 結尾的圖片分段網址".into()); };
+    let mut a = url.clone();
+    let mut b = url.clone();
+    a.set_path(&format!("{base}.b_0"));
+    b.set_path(&format!("{base}.b_1"));
+    validate_image_probe_url(a.as_str())?;
+    validate_image_probe_url(b.as_str())?;
+    Ok((a, b))
+}
+
 fn classify_image_header(data: &[u8]) -> &'static str {
     if data.starts_with(&[0xff, 0xd8, 0xff]) { return "JPEG"; }
     if data.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]) { return "PNG"; }
@@ -120,14 +145,7 @@ fn classify_image_header(data: &[u8]) -> &'static str {
     "未辨識的二進位資料"
 }
 
-#[command]
-async fn probe_comicbox_image(url: String) -> Result<ImageProbe, String> {
-    let target = validate_image_probe_url(&url)?;
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(12))
-        .user_agent("MangaHub/0.3.1 (image-format diagnostics)")
-        .build().map_err(|e| e.to_string())?;
+async fn probe_one(target: Url, client: &reqwest::Client) -> Result<ImageProbe, String> {
     let mut response = client.get(target.clone())
         .header(reqwest::header::RANGE, "bytes=0-63")
         .send().await.map_err(|e| format!("圖片來源連線失敗：{e}"))?;
@@ -137,8 +155,13 @@ async fn probe_comicbox_image(url: String) -> Result<ImageProbe, String> {
         .and_then(|h| h.to_str().ok()).unwrap_or("未提供").to_string();
     let cors = headers.get(reqwest::header::ACCESS_CONTROL_ALLOW_ORIGIN)
         .and_then(|h| h.to_str().ok()).unwrap_or("未提供").to_string();
+    let range = headers.get(reqwest::header::CONTENT_RANGE)
+        .and_then(|h| h.to_str().ok()).unwrap_or("未提供").to_string();
     let length = response.content_length();
-    // Inspect only one response chunk, never save the content or reconstruct protected images.
+    let range_honored = status == 206 && range.starts_with("bytes ");
+    let resource_size = resource_size_from_range(&range);
+    // Range 0-63 is intentionally tiny. For status 200, only inspect the first
+    // received chunk; never collect the remaining body or persist it.
     let head = if (200..300).contains(&status) {
         response.chunk().await.map_err(|e| format!("讀取資料標頭失敗：{e}"))?
             .map(|chunk| chunk[..chunk.len().min(64)].to_vec()).unwrap_or_default()
@@ -147,25 +170,80 @@ async fn probe_comicbox_image(url: String) -> Result<ImageProbe, String> {
     let recognized = format != "未辨識的二進位資料";
     let renderable = (200..300).contains(&status) && recognized;
     let explanation = if (300..400).contains(&status) {
-        "來源回傳重新導向；為避免跳轉到未知網域，診斷器不追蹤重新導向。"
+        "來源回傳重新導向，已停止，不追蹤至未知網域。"
     } else if status == 403 {
-        "HTTP 403：來源拒絕此請求。診斷器不會重試或繞過存取限制。"
+        "HTTP 403：來源拒絕本次請求，不嘗試繞過。"
     } else if !(200..300).contains(&status) {
-        "來源未回傳成功狀態，無法判斷圖片格式。"
+        "請求未成功，無法判斷圖片格式。"
     } else if recognized {
-        "資料標頭符合一般圖片格式；這不代表第三方使用權或瀏覽器載入權限已獲確認。"
+        "開頭符合標準圖片簽名，但這不代表完整資源可以直接閱讀或具有第三方授權。"
     } else {
-        "資料標頭不是常見圖片格式；可能是網站專用分段或其他資料，不能直接交給圖片閱讀器。"
+        "前 64 bytes 無法辨識為標準圖片；可能是分段、專用容器或其他二進位資料。"
     }.to_string();
     Ok(ImageProbe { url: target.to_string(), http_status: status,
         content_type, content_length: length, cors_header: cors,
         detected_format: format, directly_renderable: renderable,
-        sampled_bytes: head.len(), explanation })
+        sampled_bytes: head.len(), content_range: range,
+        resource_size, range_honored, explanation })
+}
+
+fn probe_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(12))
+        .user_agent("MangaHub/0.3.2 (read-only source diagnostics)")
+        .build().map_err(|e| e.to_string())
+}
+
+#[command]
+async fn probe_comicbox_image(url: String) -> Result<ImageProbe, String> {
+    let target = validate_image_probe_url(&url)?;
+    let client = probe_client()?;
+    probe_one(target, &client).await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PairProbe {
+    parts: Vec<ImageProbe>,
+    same_content_type: bool,
+    both_range_honored: bool,
+    reported_total_bytes: Option<u64>,
+    explanation: String,
+}
+
+#[command]
+async fn probe_comicbox_pair(url: String) -> Result<PairProbe, String> {
+    let target = validate_image_probe_url(&url)?;
+    let (a, b) = paired_image_urls(&target)?;
+    let client = probe_client()?;
+    // Intentionally issue exactly two small range requests, without retries.
+    let first = probe_one(a, &client).await?;
+    let second = probe_one(b, &client).await?;
+    let same = first.content_type == second.content_type;
+    let both_range_honored = first.range_honored && second.range_honored;
+    // This is the sum of the *individual segment resource lengths*, not the
+    // length of a reconstructed image; no reconstruction is performed.
+    let reported_total_bytes = first.resource_size.zip(second.resource_size)
+        .and_then(|(x, y)| x.checked_add(y));
+    Ok(PairProbe { parts: vec![first, second], same_content_type: same,
+        both_range_honored, reported_total_bytes,
+        explanation: "僅比較兩個 HTTP 分段的標頭與前 64 bytes；不合併、解密或下載完整圖片。".into() })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn parses_range_total_and_pairs() {
+        assert_eq!(resource_size_from_range("bytes 0-63/52352"), Some(52352));
+        assert_eq!(resource_size_from_range("bytes 0-63/*"), None);
+        let url = validate_image_probe_url("https://bmigmi-global-wuwu.ccavbox.com/break_avif/static/upload/book/5687/42682/3066481.b_0?v=1").unwrap();
+        let (a, b) = paired_image_urls(&url).unwrap();
+        assert!(a.path().ends_with("3066481.b_0"));
+        assert!(b.path().ends_with("3066481.b_1"));
+        assert_eq!(b.query(), Some("v=1"));
+    }
     #[test]
     fn probe_rejects_other_hosts_and_ports() {
         assert!(validate_image_probe_url("https://127.0.0.1/break_avif/static/upload/book/1/2/3.b_0").is_err());
@@ -198,7 +276,7 @@ mod tests {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![inspect_comicbox_chapter, probe_comicbox_image])
+        .invoke_handler(tauri::generate_handler![inspect_comicbox_chapter, probe_comicbox_image, probe_comicbox_pair])
         .run(tauri::generate_context!())
         .expect("error while running MangaHub");
 }
