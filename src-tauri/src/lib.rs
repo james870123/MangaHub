@@ -42,7 +42,7 @@ async fn inspect_comicbox_chapter(url: String) -> Result<ChapterInfo, String> {
         .user_agent("MangaHub/0.1 (chapter metadata inspection)")
         .build().map_err(|e| e.to_string())?;
     let response = client.get(target.clone()).send().await.map_err(|e| format!("網站連線失敗：{e}"))?;
-    if !response.status().is_success() { return Err(format!("網站回應 HTTP {}", response.status())); }
+    if !response.status().is_success() { return Err(format!("HTTP {} · URL: {} · 來源站拒絕或無法完成本次請求", response.status(), target)); }
     if let Some(content_type) = response.headers().get(reqwest::header::CONTENT_TYPE) {
         if !content_type.to_str().unwrap_or("").contains("text/html") { return Err("回應不是 HTML".into()); }
     }
@@ -101,6 +101,7 @@ mod tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![inspect_comicbox_chapter])
         .run(tauri::generate_context!())
         .expect("error while running MangaHub");
