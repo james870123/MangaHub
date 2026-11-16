@@ -6,7 +6,7 @@ import { BookOpen, Bookmark, ExternalLink, RefreshCw, ChevronLeft, ChevronRight,
 import './style.css';
 import Reader from './Reader';
 import SourceDiagnostics from './SourceDiagnostics';
-import SourceCapabilities from './SourceCapabilities';
+import SourceCapabilities from './SourceCapabilityPanel';
 import { sourceForUrl } from './sourceCapabilities';
 
 type Chapter = { id: string; title: string; url: string };
