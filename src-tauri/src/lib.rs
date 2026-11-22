@@ -1,5 +1,6 @@
 use scraper::{Html, Selector};
 use serde::Serialize;
+use serde_json::Value;
 use tauri::command;
 use url::Url;
 
@@ -272,11 +273,122 @@ mod tests {
     }
 }
 
+
+// nHentai v2 public gallery metadata. This command never fetches image bytes,
+// does not use cookies, bypass challenges, or discover private endpoints.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NhGallery {
+    id: u64,
+    title: String,
+    page_urls: Vec<String>,
+}
+
+fn nh_gallery_id(input: &str) -> Result<u64, String> {
+    let trimmed = input.trim();
+    if !trimmed.is_empty() && trimmed.bytes().all(|b| b.is_ascii_digit()) {
+        return trimmed.parse::<u64>().ok().filter(|&n| n > 0)
+            .ok_or_else(|| "作品 ID 無效".into());
+    }
+    let u = Url::parse(trimmed).map_err(|_| "請輸入作品 ID 或 https://nhentai.net/g/數字/".to_string())?;
+    if u.scheme() != "https" || u.host_str() != Some("nhentai.net")
+        || u.port().is_some() || u.query().is_some() || u.fragment().is_some()
+        || !u.username().is_empty() || u.password().is_some() {
+        return Err("僅允許 nhentai.net 的 HTTPS 作品網址".into());
+    }
+    let segments: Vec<_> = u.path().trim_matches('/').split('/').collect();
+    if segments.len() != 2 || segments[0] != "g" || segments[1].is_empty()
+        || !segments[1].bytes().all(|b| b.is_ascii_digit()) {
+        return Err("網址格式應為 https://nhentai.net/g/123456/".into());
+    }
+    segments[1].parse::<u64>().ok().filter(|&n| n > 0)
+        .ok_or_else(|| "作品 ID 無效".into())
+}
+
+fn verified_page_url(path: &str) -> Result<String, String> {
+    let parts: Vec<_> = path.split('/').collect();
+    if parts.len() != 3 || parts[0] != "galleries"
+        || !parts[1].bytes().all(|b| b.is_ascii_digit()) || parts[1].is_empty() {
+        return Err("API 圖片路徑不符合預期".into());
+    }
+    let Some((number, ext)) = parts[2].rsplit_once('.') else {
+        return Err("API 圖片路徑沒有副檔名".into());
+    };
+    if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit())
+        || !matches!(ext, "jpg" | "png" | "webp" | "gif" | "avif") {
+        return Err("API 圖片格式不支援".into());
+    }
+    Ok(format!("https://i.nhentai.net/{path}"))
+}
+
+fn parse_nh_gallery(data: &Value, requested_id: u64) -> Result<NhGallery, String> {
+    let id = data.get("id").and_then(Value::as_u64).ok_or("API 沒有作品 ID")?;
+    if id != requested_id { return Err("API 回傳的作品 ID 不符合請求".into()); }
+    let title = data.get("title")
+        .and_then(|v| ["pretty", "english", "japanese"].iter()
+            .find_map(|key| v.get(*key).and_then(Value::as_str).filter(|s| !s.trim().is_empty())))
+        .unwrap_or("未命名作品").chars().take(240).collect::<String>();
+
+    let pages = data.get("pages").and_then(Value::as_array)
+        .ok_or("API 沒有 pages 清單，無法直接閱讀")?;
+    if pages.is_empty() || pages.len() > 1000 { return Err("作品頁數不在支援範圍".into()); }
+    let mut page_urls = Vec::with_capacity(pages.len());
+    for page in pages {
+        let path = page.get("path").and_then(Value::as_str)
+            .ok_or("API 頁面缺少 path")?;
+        page_urls.push(verified_page_url(path)?);
+    }
+    Ok(NhGallery { id, title, page_urls })
+}
+
+#[command]
+async fn fetch_nh_gallery(input: String) -> Result<NhGallery, String> {
+    let id = nh_gallery_id(&input)?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent("MangaHub/0.4 (gallery metadata reader)")
+        .build().map_err(|e| e.to_string())?;
+    let response = client.get(format!("https://nhentai.net/api/v2/galleries/{id}"))
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send().await.map_err(|e| format!("API 連線失敗：{e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("API 回傳 HTTP {}；若遇到 403/429，請遵守網站限制，不要密集重試。", response.status().as_u16()));
+    }
+    if let Some(len) = response.content_length() {
+        if len > 1_000_000 { return Err("API 回應過大".into()); }
+    }
+    let body = response.bytes().await.map_err(|e| format!("讀取 API 失敗：{e}"))?;
+    if body.len() > 1_000_000 { return Err("API 回應過大".into()); }
+    let data: Value = serde_json::from_slice(&body).map_err(|_| "API 並未回傳有效 JSON".to_string())?;
+    parse_nh_gallery(&data, id)
+}
+
+#[cfg(test)]
+mod nh_tests {
+    use super::*;
+    #[test]
+    fn gallery_url_restrictions() {
+        assert_eq!(nh_gallery_id("https://nhentai.net/g/12345/").unwrap(), 12345);
+        assert_eq!(nh_gallery_id("12345").unwrap(), 12345);
+        assert!(nh_gallery_id("https://nhentai.net.evil.test/g/12345/").is_err());
+        assert!(nh_gallery_id("http://nhentai.net/g/12345/").is_err());
+        assert!(verified_page_url("galleries/123/1.jpg").is_ok());
+        assert!(verified_page_url("https://evil.test/1.jpg").is_err());
+    }
+    #[test]
+    fn metadata_to_urls() {
+        let data = serde_json::json!({"id":12345,"title":{"pretty":"Demo"},"pages":[{"path":"galleries/123/1.jpg"},{"path":"galleries/123/2.webp"}]});
+        let parsed = parse_nh_gallery(&data, 12345).unwrap();
+        assert_eq!(parsed.page_urls.len(), 2);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![inspect_comicbox_chapter, probe_comicbox_image, probe_comicbox_pair])
+        .invoke_handler(tauri::generate_handler![inspect_comicbox_chapter, probe_comicbox_image, probe_comicbox_pair, fetch_nh_gallery])
         .run(tauri::generate_context!())
         .expect("error while running MangaHub");
 }

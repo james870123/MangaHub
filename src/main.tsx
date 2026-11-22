@@ -6,6 +6,7 @@ import { BookOpen, Bookmark, ExternalLink, RefreshCw, ChevronLeft, ChevronRight,
 import './style.css';
 import Reader from './Reader';
 import SourceDiagnostics from './SourceDiagnostics';
+import NhentaiSource from './NhentaiSource';
 import SourceCapabilities from './SourceCapabilityPanel';
 import { sourceForUrl } from './sourceCapabilities';
 
@@ -20,7 +21,7 @@ function useSaved<T>(key: string, initial: T): [T, React.Dispatch<React.SetState
 }
 const example = 'https://www.comicbox.xyz/free-chapter/42682?t=20260415';
 function App() {
-  const [tab, setTab] = useState<'source' | 'library' | 'reader' | 'chapter' | 'diagnostics' | 'capabilities'>('source');
+  const [tab, setTab] = useState<'source' | 'library' | 'reader' | 'chapter' | 'diagnostics' | 'capabilities' | 'nhentai'>('source');
   const [url, setUrl] = useState(example);
   const [readerUrls, setReaderUrls] = useState<string[] | undefined>();
   const [readerSession, setReaderSession] = useState(0);
@@ -82,9 +83,10 @@ function App() {
       <button className={tab === 'source' ? 'nav active' : 'nav'} onClick={() => setTab('source')}><Search size={19}/> 來源解析</button>
       <button className={tab === 'library' ? 'nav active' : 'nav'} onClick={() => setTab('library')}><Library size={19}/> 我的書架 <span className="count">{books.length}</span></button>
       <button className={tab === 'reader' ? 'nav active' : 'nav'} onClick={() => setTab('reader')}><Image size={19}/> 圖片閱讀器</button>
+      <button className={tab === 'nhentai' ? 'nav active' : 'nav'} onClick={() => setTab('nhentai')}><BookOpen size={19}/> nHentai Gallery</button>
       <button className={tab === 'capabilities' ? 'nav active' : 'nav'} onClick={() => setTab('capabilities')}><Image size={19}/> 來源相容性</button>
       <button className={tab === 'diagnostics' ? 'nav active' : 'nav'} onClick={() => setTab('diagnostics')}><Globe2 size={19}/> 來源診斷</button>
-      <div className="asideFoot"><CircleHelp size={16}/> v0.3.3 · Local-first<br/><span>無原站廣告、無追蹤 SDK</span></div>
+      <div className="asideFoot"><CircleHelp size={16}/> v0.4.0 · Local-first<br/><span>無原站廣告、無追蹤 SDK</span></div>
     </aside>
     <main className="main">
       <header><span className="eyebrow"><Globe2 size={15}/> MangaHub / {tab === 'source' ? 'Source Inspector' : tab === 'library' ? 'My Library' : tab === 'chapter' ? 'Chapter' : tab === 'diagnostics' ? 'Diagnostics' : tab === 'capabilities' ? 'Source Capabilities' : 'Reader'}</span><span className="status">● Local-first</span></header>
@@ -120,6 +122,7 @@ function App() {
       </section>}
       {tab === 'library' && <section className="content"><div className="pill">PERSONAL COLLECTION</div><h1>我的<span>書架</span></h1><p className="lead">收藏資料只儲存在這台裝置，不會上傳到伺服器。</p>{books.length === 0 ? <div className="empty"><Library size={36}/><h2>書架還是空的</h2><p>先到來源解析頁面，解析章節後即可收藏。</p><button onClick={() => setTab('source')} className="primary">前往來源解析</button></div> : <div className="bookGrid">{books.map(book => <div className="book" key={book.chapterId}><div className="bookCover"><BookOpen size={36}/></div><div className="bookInfo"><b>{book.title}</b><small>{book.pages} 個頁面節點</small><div className="bookActions"><button onClick={() => void openChapter({ id: book.chapterId, title: book.title, url: book.url })}>開啟章節</button><button aria-label="移除收藏" onClick={() => setBooks(p => p.filter(x => x.chapterId !== book.chapterId))}><Trash2 size={16}/></button></div></div></div>)}</div>}</section>}
       {tab === 'capabilities' && <SourceCapabilities onRead={readDirectImages}/>}
+      {tab === 'nhentai' && <NhentaiSource onRead={readDirectImages}/>}
       {tab === 'diagnostics' && <SourceDiagnostics/>}
       {tab === 'reader' && <Reader key={readerSession} initialUrls={readerUrls}/>} 
     </main>
