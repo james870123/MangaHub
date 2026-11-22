@@ -44,6 +44,7 @@ export default function NhCatalog(props: Props) {
   const [detailError, setDetailError] = useState('');
   const [selection, setSelection] = useState<CatalogItem | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const [coverOverrides, setCoverOverrides] = useState<Record<number, string>>({});
 
   useEffect(() => {
     if (!adultConfirmed || mode === 'favorites' || mode === 'history' || (mode === 'search' && !submitted)) return;
@@ -64,11 +65,14 @@ export default function NhCatalog(props: Props) {
     try {
       const data = await invoke<GalleryDetail>('fetch_nh_gallery', { input: String(item.id) });
       setDetail(data);
-      if (data.coverUrl) onRepairHistoryCover(data.id, data.coverUrl);
+      if (data.coverUrl) {
+        setCoverOverrides(prev => ({ ...prev, [data.id]: data.coverUrl! }));
+        onRepairHistoryCover(data.id, data.coverUrl);
+      }
     } catch (err) { setDetailError(String(err)); }
     finally { setDetailLoading(false); }
   }, [onRepairHistoryCover]);
-  const visibleItems = mode === 'favorites' ? favorites : mode === 'history' ? history.map(infoForRecord) : (result?.items ?? []);
+  const visibleItems = (mode === 'favorites' ? favorites : mode === 'history' ? history.map(infoForRecord) : (result?.items ?? [])).map(item => coverOverrides[item.id] ? { ...item, coverUrl: coverOverrides[item.id] } : item);
   const selected = selection ? favorites.some(f => f.id === selection.id) : false;
 
   if (!adultConfirmed) return <section className="content">
@@ -102,7 +106,7 @@ export default function NhCatalog(props: Props) {
     {!loading && !error && visibleItems.length === 0 && <div className="empty"><BookOpen size={34}/><h2>{mode === 'search' && !submitted ? '輸入關鍵字開始搜尋' : '目前沒有作品'}</h2><p>{mode === 'favorites' ? '點選漫畫詳情中的收藏按鈕即可加入。' : mode === 'history' ? '開始閱讀後，作品會出現在這裡。' : '可嘗試其他搜尋關鍵字或稍後重新整理。'}</p></div>}
     <div className="catalogGrid">{visibleItems.map(item => <article key={item.id} className="catalogCard">
       <button className="catalogCardMain" onClick={() => void openDetail(item)} aria-label={`查看 ${item.title}`}>
-        <div className="catalogCover"><BookOpen size={32}/>{showCovers && item.coverUrl && <img src={item.coverUrl} alt="作品封面" loading="lazy" referrerPolicy="no-referrer" onError={e => { e.currentTarget.style.display = 'none'; }}/>}</div>
+        <div className="catalogCover"><BookOpen size={32}/>{showCovers && item.coverUrl && <img src={item.coverUrl} alt="作品封面" title="封面無法載入時，點擊作品取得最新資料" loading="lazy" referrerPolicy="no-referrer" onError={e => { e.currentTarget.style.display = 'none'; }}/>}</div>
         <div className="catalogCardText"><strong>{item.title}</strong><small>#{item.id} · {item.pageCount || '—'} 頁</small>{mode === 'history' && <small><Clock3 size={12}/> 上次第 {history.find(r => r.id === item.id)?.page ?? 1} 頁</small>}{mode === 'history' && !item.coverUrl && <small>封面未儲存，點此更新資料</small>}</div>
       </button>
       <button className="catalogHeart" aria-label={favorites.some(f => f.id === item.id) ? '取消收藏' : '收藏'} onClick={() => onToggleFavorite(item)}><Heart size={18} fill={favorites.some(f => f.id === item.id) ? 'currentColor' : 'none'}/></button>

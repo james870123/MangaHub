@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, ChevronLeft, ChevronRight, ImagePlus, RotateCcw, Trash2, ZoomOut } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ChevronLeft, ChevronRight, ImagePlus, RotateCcw, Trash2, ZoomOut } from 'lucide-react';
 
 type ReadingMode = 'vertical' | 'ltr' | 'rtl';
 type PageStatus = 'idle' | 'loading' | 'ready' | 'failed';
@@ -42,7 +42,7 @@ function ReaderImage({ src, index, eager, onVisible }: { src: string; index: num
   </div>;
 }
 
-export default function Reader({ initialUrls, onProgress }: { initialUrls?: string[]; onProgress?: (page: number) => void }) {
+export default function Reader({ initialUrls, onProgress, onBack, backLabel, galleryTitle }: { initialUrls?: string[]; onProgress?: (page: number) => void; onBack?: () => void; backLabel?: string; galleryTitle?: string }) {
   const [imageText, setImageText] = useState(() => initialUrls?.join('\n') ?? safeRead(STORAGE_URLS, ''));
   const [mode, setMode] = useState<ReadingMode>(() => {
     const value = safeRead(STORAGE_MODE, 'vertical');
@@ -131,14 +131,15 @@ export default function Reader({ initialUrls, onProgress }: { initialUrls?: stri
     }
   }, []);
   return <section className="content readerContent">
-    <div className="pill">MANGAHUB · READER v0.3</div>
-    <h1>圖片<span>閱讀器</span></h1>
-    <p className="lead">閱讀你有權存取的標準圖片，支援 JPG、PNG、WebP、AVIF、長條捲動與左右翻頁。此閱讀器不載入第三方網站 HTML 或廣告。</p>
-    <div className="mh-import">
+    {onBack && <div className="readerReturnBar"><button className="readerBack" onClick={onBack} title="返回先前瀏覽的列表（Esc / Alt+←）"><ArrowLeft size={18}/> {backLabel ?? '返回上一頁'}</button><span>Esc / Alt + ← 返回</span></div>}
+    <div className="pill">MANGAHUB · READER</div>
+    <h1>{galleryTitle ? <>正在<span>閱讀</span></> : <>圖片<span>閱讀器</span></>}</h1>
+    {galleryTitle ? <p className="readerGalleryTitle" title={galleryTitle}>{galleryTitle}</p> : <p className="lead">閱讀你有權存取的標準圖片，支援 JPG、PNG、WebP、AVIF、長條捲動與左右翻頁。此閱讀器不載入第三方網站 HTML 或廣告。</p>}
+    {!galleryTitle && <div className="mh-import">
       <label className="mh-upload"><ImagePlus size={18}/> 選取本機圖片 <input type="file" accept="image/*,.avif" multiple onChange={e => { addLocalFiles(e.target.files); e.currentTarget.value = ''; }}/></label>
       <span>或每行輸入一個 HTTPS 圖片網址：</span>
-    </div>
-    <textarea value={imageText} onChange={e => setImageText(e.target.value)} rows={4} placeholder={'https://example.org/page001.jpg\nhttps://example.org/page002.webp'}/>
+    </div>}
+    {!galleryTitle && <textarea value={imageText} onChange={e => setImageText(e.target.value)} rows={4} placeholder={'https://example.org/page001.jpg\nhttps://example.org/page002.webp'}/>}
     {invalidUrls.length > 0 && <div className="mh-validation"><AlertCircle size={16}/> 已略過 {invalidUrls.length} 個無效網址（僅支援不含帳密的 HTTPS URL）。</div>}
     <div className="readerTools mh-reader-tools">
       <span>{sources.length} 張圖片 · {sources.length ? `第 ${mode === 'vertical' ? scrollPage + 1 : current + 1} 頁` : '尚未載入'}</span>

@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import { BookOpen, Bookmark, ExternalLink, RefreshCw, ChevronLeft, ChevronRight, CircleHelp, Globe2, Image, Library, Link, LoaderCircle, Plus, Search, Trash2 } from 'lucide-react';
+import { BookOpen, Bookmark, ExternalLink, RefreshCw, ChevronLeft, ChevronRight, CircleHelp, Globe2, Image, Library, Link, LoaderCircle, Plus, Search, Trash2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import './style.css';
 import Reader from './Reader';
 import SourceDiagnostics from './SourceDiagnostics';
@@ -24,6 +24,37 @@ const example = 'https://www.comicbox.xyz/free-chapter/42682?t=20260415';
 function App() {
   const [tab, setTab] = useState<'source' | 'library' | 'reader' | 'chapter' | 'diagnostics' | 'capabilities' | 'nhentai' | 'catalog'>('catalog');
   const [url, setUrl] = useState(example);
+  const [sidebarCollapsed, setSidebarCollapsed] = useSaved('mh-ui-sidebar-collapsed', false);
+  const readerOrigin = useRef<'catalog' | 'nhentai' | 'capabilities' | null>(null);
+  const catalogScroll = useRef(0);
+  const originScroll = useRef(0);
+  const [readerReturn, setReaderReturn] = useState<'catalog' | 'nhentai' | 'capabilities' | null>(null);
+  function openTab(next: typeof tab) {
+    if (next === 'catalog' && tab !== 'reader') window.scrollTo(0, catalogScroll.current);
+    setTab(next);
+  }
+  function returnFromReader() {
+    const target = readerOrigin.current;
+    readerOrigin.current = null;
+    setReaderReturn(null);
+    setTab(target ?? 'catalog');
+    if (target) {
+      const y = target === 'catalog' ? catalogScroll.current : originScroll.current;
+      requestAnimationFrame(() => requestAnimationFrame(() => window.scrollTo({ top: y, behavior: 'instant' })));
+    } else window.scrollTo(0, 0);
+  }
+  useEffect(() => {
+    if (tab !== 'reader' || !readerReturn) return;
+    const onBack = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' || (event.altKey && event.key === 'ArrowLeft')) {
+        const active = document.activeElement;
+        if (active && ['INPUT','TEXTAREA','SELECT'].includes(active.tagName)) return;
+        event.preventDefault(); returnFromReader();
+      }
+    };
+    window.addEventListener('keydown', onBack);
+    return () => window.removeEventListener('keydown', onBack);
+  }, [tab, readerReturn]);
   const [readerUrls, setReaderUrls] = useState<string[] | undefined>();
   const [readerSession, setReaderSession] = useState(0);
   const [adultConfirmed, setAdultConfirmed] = useSaved('mh-v05-adult-confirmed', false);
@@ -38,18 +69,30 @@ function App() {
       const record: ReadingRecord = { id: gallery.id, title: gallery.title, coverUrl: gallery.coverUrl ?? existing?.coverUrl ?? null, page: existing?.page ?? 1, total: gallery.pageUrls.length, updatedAt: Date.now() };
       return [record, ...prev.filter(r => r.id !== gallery.id)].slice(0, 200);
     });
-    readDirectImages(gallery.pageUrls);
+    readDirectImages(gallery.pageUrls, 'catalog');
     setCurrentGallery(gallery);
   }
   function repairHistoryCover(id: number, coverUrl: string) {
     setNhHistory(prev => prev.map(record => record.id === id && record.coverUrl !== coverUrl
       ? { ...record, coverUrl } : record));
+    setNhFavorites(prev => prev.map(item => item.id === id && item.coverUrl !== coverUrl
+      ? { ...item, coverUrl } : item));
   }
   function recordNhProgress(page: number) {
     if (!currentGallery) return;
     setNhHistory(prev => prev.map(r => r.id === currentGallery.id && r.page !== page ? { ...r, page, updatedAt: Date.now() } : r));
   }
-  function readDirectImages(urls: string[]) { setCurrentGallery(null); setReaderUrls(urls); setReaderSession(n => n + 1); setTab('reader'); }
+  function readDirectImages(urls: string[], origin: 'catalog' | 'nhentai' | 'capabilities' | null = null) {
+    originScroll.current = window.scrollY;
+    if (origin === 'catalog') catalogScroll.current = window.scrollY;
+    readerOrigin.current = origin;
+    setReaderReturn(origin);
+    setCurrentGallery(null);
+    setReaderUrls(urls);
+    setReaderSession(n => n + 1);
+    setTab('reader');
+    window.scrollTo(0, 0);
+  }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState<ChapterInfo | null>(null);
@@ -100,21 +143,22 @@ function App() {
     const item = { url: info.url, title: info.title, pages: info.pages, chapterId: info.chapterId, savedAt: Date.now() };
     setBooks(prev => [item, ...prev.filter(b => b.chapterId !== item.chapterId)]);
   }
-  return <div className="app">
+  return <div className={sidebarCollapsed ? "app sidebar-collapsed" : "app"}>
     <aside className="sidebar">
-      <div className="brand"><div className="brandicon"><BookOpen size={22}/></div><div><strong>MangaHub</strong><small>YOUR READING SPACE</small></div></div>
+      <div className="brand"><div className="brandicon"><BookOpen size={22}/></div><div className="brandText"><strong>MangaHub</strong><small>YOUR READING SPACE</small></div></div>
+      <button className="sidebarToggle" type="button" title={sidebarCollapsed ? '展開側邊欄' : '收合側邊欄'} aria-label={sidebarCollapsed ? '展開側邊欄' : '收合側邊欄'} aria-expanded={!sidebarCollapsed} onClick={() => setSidebarCollapsed(v => !v)}>{sidebarCollapsed ? <PanelLeftOpen size={19}/> : <PanelLeftClose size={19}/>}<span>{sidebarCollapsed ? '展開選單' : '收合選單'}</span></button>
       <div className="sideTitle">工作空間</div>
-      <button className={tab === 'source' ? 'nav active' : 'nav'} onClick={() => setTab('source')}><Search size={19}/> 來源解析</button>
-      <button className={tab === 'library' ? 'nav active' : 'nav'} onClick={() => setTab('library')}><Library size={19}/> 我的書架 <span className="count">{books.length}</span></button>
-      <button className={tab === 'reader' ? 'nav active' : 'nav'} onClick={() => setTab('reader')}><Image size={19}/> 圖片閱讀器</button>
-      <button className={tab === 'catalog' ? 'nav active' : 'nav'} onClick={() => setTab('catalog')}><Search size={19}/> 漫畫探索</button>
-      <button className={tab === 'nhentai' ? 'nav active' : 'nav'} onClick={() => setTab('nhentai')}><BookOpen size={19}/> nHentai Gallery</button>
-      <button className={tab === 'capabilities' ? 'nav active' : 'nav'} onClick={() => setTab('capabilities')}><Image size={19}/> 來源相容性</button>
-      <button className={tab === 'diagnostics' ? 'nav active' : 'nav'} onClick={() => setTab('diagnostics')}><Globe2 size={19}/> 來源診斷</button>
-      <div className="asideFoot"><CircleHelp size={16}/> v0.5.0 · Local-first<br/><span>無原站廣告、無追蹤 SDK</span></div>
+      <button title="來源解析" aria-label="來源解析" className={tab === 'source' ? 'nav active' : 'nav'} onClick={() => openTab('source')}><Search size={19}/><span className="navText">來源解析</span></button>
+      <button title="我的書架" aria-label="我的書架" className={tab === 'library' ? 'nav active' : 'nav'} onClick={() => openTab('library')}><Library size={19}/><span className="navText">我的書架</span> <span className="count">{books.length}</span></button>
+      <button title="圖片閱讀器" aria-label="圖片閱讀器" className={tab === 'reader' ? 'nav active' : 'nav'} onClick={() => { setCurrentGallery(null); setReaderReturn(null); readerOrigin.current = null; setReaderUrls(undefined); openTab('reader'); }}><Image size={19}/><span className="navText">圖片閱讀器</span></button>
+      <button title="漫畫探索" aria-label="漫畫探索" className={tab === 'catalog' ? 'nav active' : 'nav'} onClick={() => openTab('catalog')}><Search size={19}/><span className="navText">漫畫探索</span></button>
+      <button title="nHentai Gallery" aria-label="nHentai Gallery" className={tab === 'nhentai' ? 'nav active' : 'nav'} onClick={() => openTab('nhentai')}><BookOpen size={19}/><span className="navText">nHentai Gallery</span></button>
+      <button title="來源相容性" aria-label="來源相容性" className={tab === 'capabilities' ? 'nav active' : 'nav'} onClick={() => openTab('capabilities')}><Image size={19}/><span className="navText">來源相容性</span></button>
+      <button title="來源診斷" aria-label="來源診斷" className={tab === 'diagnostics' ? 'nav active' : 'nav'} onClick={() => openTab('diagnostics')}><Globe2 size={19}/><span className="navText">來源診斷</span></button>
+      <div className="asideFoot"><CircleHelp size={16}/><span className="footText">v0.5.3 · Local-first<br/>無原站廣告、無追蹤 SDK</span></div>
     </aside>
     <main className="main">
-      <header><span className="eyebrow"><Globe2 size={15}/> MangaHub / {tab === 'source' ? 'Source Inspector' : tab === 'library' ? 'My Library' : tab === 'chapter' ? 'Chapter' : tab === 'diagnostics' ? 'Diagnostics' : tab === 'capabilities' ? 'Source Capabilities' : 'Reader'}</span><span className="status">● Local-first</span></header>
+      <header><span className="eyebrow"><Globe2 size={15}/> MangaHub / {tab === 'source' ? 'Source Inspector' : tab === 'library' ? 'My Library' : tab === 'chapter' ? 'Chapter' : tab === 'diagnostics' ? 'Diagnostics' : tab === 'capabilities' ? 'Source Capabilities' : tab === 'catalog' ? 'Discover' : tab === 'nhentai' ? 'Gallery' : 'Reader'}</span><span className="status">● Local-first</span></header>
       {tab === 'source' && <section className="content">
         <div className="pill">SOURCE ADAPTER · COMICBOX</div>
         <h1>探索漫畫，<br/><span>專注於閱讀。</span></h1>
@@ -146,11 +190,11 @@ function App() {
         <p className="detailNote">來源網址：{active?.url || '尚未選擇'}。原站在外部瀏覽器開啟時，其廣告仍由原網站控制。</p>
       </section>}
       {tab === 'library' && <section className="content"><div className="pill">PERSONAL COLLECTION</div><h1>我的<span>書架</span></h1><p className="lead">收藏資料只儲存在這台裝置，不會上傳到伺服器。</p>{books.length === 0 ? <div className="empty"><Library size={36}/><h2>書架還是空的</h2><p>先到來源解析頁面，解析章節後即可收藏。</p><button onClick={() => setTab('source')} className="primary">前往來源解析</button></div> : <div className="bookGrid">{books.map(book => <div className="book" key={book.chapterId}><div className="bookCover"><BookOpen size={36}/></div><div className="bookInfo"><b>{book.title}</b><small>{book.pages} 個頁面節點</small><div className="bookActions"><button onClick={() => void openChapter({ id: book.chapterId, title: book.title, url: book.url })}>開啟章節</button><button aria-label="移除收藏" onClick={() => setBooks(p => p.filter(x => x.chapterId !== book.chapterId))}><Trash2 size={16}/></button></div></div></div>)}</div>}</section>}
-      {tab === 'capabilities' && <SourceCapabilities onRead={readDirectImages}/>}
-      {tab === 'nhentai' && <NhentaiSource onRead={readDirectImages}/>}
-      {tab === 'catalog' && <NhCatalog adultConfirmed={adultConfirmed} showCovers={showCovers} onAdultChange={setAdultConfirmed} onCoversChange={setShowCovers} favorites={nhFavorites} onToggleFavorite={toggleNhFavorite} history={nhHistory} onClearHistory={() => setNhHistory([])} onReadGallery={readNhGallery} onRepairHistoryCover={repairHistoryCover}/>}
+      <div className={tab === 'capabilities' ? 'sourceView' : 'sourceView is-hidden'}><SourceCapabilities onRead={urls => readDirectImages(urls, 'capabilities')}/></div>
+      <div className={tab === 'nhentai' ? 'sourceView' : 'sourceView is-hidden'}><NhentaiSource onRead={urls => readDirectImages(urls, 'nhentai')}/></div>
+      <div className={tab === 'catalog' ? 'catalogView' : 'catalogView is-hidden'}><NhCatalog adultConfirmed={adultConfirmed} showCovers={showCovers} onAdultChange={setAdultConfirmed} onCoversChange={setShowCovers} favorites={nhFavorites} onToggleFavorite={toggleNhFavorite} history={nhHistory} onClearHistory={() => setNhHistory([])} onReadGallery={readNhGallery} onRepairHistoryCover={repairHistoryCover}/></div>
       {tab === 'diagnostics' && <SourceDiagnostics/>}
-      {tab === 'reader' && <Reader key={readerSession} initialUrls={readerUrls} onProgress={currentGallery ? recordNhProgress : undefined}/>} 
+      {tab === 'reader' && <Reader key={readerSession} initialUrls={readerUrls} onProgress={currentGallery ? recordNhProgress : undefined} galleryTitle={currentGallery?.title} onBack={readerReturn ? returnFromReader : undefined} backLabel={readerReturn === 'catalog' ? '返回漫畫列表' : readerReturn === 'nhentai' ? '返回 Gallery' : '返回來源頁'}/>} 
     </main>
   </div>;
 }

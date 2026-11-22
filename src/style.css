@@ -64,3 +64,30 @@
 .catalogTags span{background:#302b3a;border-radius:8px;padding:6px 9px;font-size:11px;color:#cdbfd1}
 button:disabled{opacity:.45;cursor:not-allowed}
 @media(max-width:750px){.catalogPage{padding:26px 5%}.catalogGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.catalogCover{height:180px}.catalogCardText{padding:10px 10px 45px}.catalogDetailRow{flex-direction:column}.catalogDetailCover{width:135px;height:180px}.catalogModal{padding:22px}}
+
+/* v0.5.3 navigation, compact sidebar and reader return */
+.sidebar {transition:width .2s ease,min-width .2s ease;position:sticky;top:0;height:100vh;flex-shrink:0;overflow-y:auto;scrollbar-width:thin}
+.sidebarToggle {display:flex;align-items:center;gap:10px;margin:0 4px 26px;padding:10px 12px;color:#cab2d6;background:#25212f;border:1px solid #423549;border-radius:10px;text-align:left;font-size:12px;white-space:nowrap}
+.sidebarToggle:hover,.readerBack:hover{background:#43304d;color:#fff}
+.navText{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sidebar-collapsed .sidebar{width:78px;min-width:78px;padding:22px 10px}
+.sidebar-collapsed .brand{padding:0 0 22px;justify-content:center}
+.sidebar-collapsed .brandText,.sidebar-collapsed .sideTitle,.sidebar-collapsed .navText,.sidebar-collapsed .count,.sidebar-collapsed .asideFoot,.sidebar-collapsed .sidebarToggle span{display:none}
+.sidebar-collapsed .sidebarToggle{justify-content:center;margin:0 0 18px;padding:12px}
+.sidebar-collapsed .nav{justify-content:center;padding:14px 8px;margin:3px 0}
+.sidebar-collapsed .nav svg{flex-shrink:0}
+.catalogView.is-hidden,.sourceView.is-hidden{display:none}
+.readerReturnBar{display:flex;align-items:center;gap:16px;justify-content:space-between;margin-bottom:24px;position:sticky;top:10px;z-index:8;width:fit-content;max-width:100%;padding:5px;background:#16151eea;backdrop-filter:blur(10px);border:1px solid #3d3048;border-radius:12px}
+.readerReturnBar span{font-size:11px;color:#9294a5}
+.readerBack{display:inline-flex;align-items:center;gap:8px;background:#33263e;color:#f0caff;border:1px solid #684c79;border-radius:9px;padding:11px 15px;font-weight:700;font-size:13px}
+.readerGalleryTitle{font-size:17px;color:#d1b7d9;line-height:1.5;margin:0 0 25px;overflow-wrap:anywhere}
+.catalogCard:hover{border-color:#9c6fba;transform:translateY(-2px);transition:transform .14s ease,border-color .14s ease}
+.catalogCardMain:focus-visible,.catalogHeart:focus-visible,.nav:focus-visible,.sidebarToggle:focus-visible,.readerBack:focus-visible{outline:2px solid #dc9df7;outline-offset:2px}
+@media(max-width:750px){
+  .sidebar,.sidebar-collapsed .sidebar{position:fixed;top:auto;bottom:0;left:0;right:0;width:100%;min-width:0;height:65px;padding:5px;flex-direction:row;justify-content:flex-start;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}
+  .sidebarToggle,.sidebar-collapsed .sidebarToggle{display:none}
+  .sidebar .nav,.sidebar-collapsed .nav{min-width:58px;flex:1 0 58px;padding:8px 2px;display:flex;align-items:center;justify-content:center;margin:0}
+  .sidebar .navText,.sidebar-collapsed .navText{display:block;font-size:9px;max-width:66px}
+  .sidebar-collapsed .brand,.sidebar-collapsed .brandText{display:none}
+  .readerReturnBar span{display:none}
+}
