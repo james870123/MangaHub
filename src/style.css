@@ -206,3 +206,21 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .roumanRecent{margin-top:36px}.roumanRecent h3{font-size:16px}
 .roumanPage .detailNote{align-self:center}
 @media(max-width:750px){.roumanPage{padding:24px 5%}.roumanPage .urlbox button{min-width:100%}}
+
+/* Rouman5 full-width discovery. Comic images retain Reader's own width rules. */
+.roumanExplore{width:100%;max-width:none;margin:0;padding:clamp(20px,3vw,44px)}
+.roumanToolbar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}.roumanToolbar .toggle{margin:0}
+.roumanFilter{display:flex;align-items:center;gap:12px;background:#1c1e28;border:1px solid #393441;border-radius:12px;padding:13px 17px;margin:14px 0 26px}
+.roumanFilter input{flex:1;min-width:0;background:transparent;border:0;color:#eee;outline:0}
+.roumanFilter small{color:#9991a4;font-size:11px}.roumanSection{margin:32px 0}
+.roumanSection h2{font-size:20px;margin:0 0 17px}.roumanSection h2 small{color:#93939e;font-size:12px;font-weight:normal;margin-left:10px}
+.roumanGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:17px}
+.roumanCard{background:#1d202a;border:1px solid #34323d;border-radius:12px;overflow:hidden;min-width:0}
+.roumanCoverButton{display:grid;place-items:center;width:100%;aspect-ratio:3/4;background:linear-gradient(140deg,#473150,#232430);color:#caa0db;border:0;padding:0;overflow:hidden}
+.roumanCoverButton img{width:100%;height:100%;object-fit:cover}
+.roumanCardInfo{padding:10px}.roumanTitle{border:0;color:#ecedf2;background:none;padding:0;text-align:left;font-size:12px;font-weight:700;line-height:1.45;min-height:36px;max-height:36px;overflow:hidden;width:100%}
+.roumanCardBottom{display:flex;align-items:center;justify-content:space-between;gap:7px;margin-top:7px}.roumanCardBottom small{font-size:10px;color:#9b94a3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.roumanHeart{color:#e2a9e9;background:#342b3b;border:1px solid #5f4568;border-radius:7px;padding:7px;display:grid;place-items:center}
+.roumanPager,.roumanDetailActions{display:flex;align-items:center;gap:14px;justify-content:center;margin:20px 0}.roumanPager .toggle{margin:0}
+.roumanDetail{margin-top:30px}.roumanChapterList{max-height:520px}.roumanResult{margin-top:24px}.roumanManual,.roumanRecent{margin:24px 0;padding:14px;border:1px solid #363341;border-radius:11px}.roumanManual summary,.roumanRecent summary{cursor:pointer;color:#d9a8e6}.roumanManual .urlbox{margin-top:15px}
+@media(max-width:650px){.roumanExplore{padding:20px 4%}.roumanGrid{grid-template-columns:repeat(auto-fill,minmax(122px,1fr));gap:10px}.roumanFilter{flex-wrap:wrap}.roumanFilter small{width:100%}}

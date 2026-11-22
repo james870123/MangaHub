@@ -939,10 +939,204 @@ mod rouman_tests {
     }
 }
 
+
+// Rouman5 public browsing: only fetches human-visible HTML pages, never
+// calls private Next.js server functions or generates CDN image addresses.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RoumanBookCard {
+    id: String,
+    title: String,
+    url: String,
+    cover_url: Option<String>,
+    section: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RoumanCatalog {
+    mode: String,
+    page: u32,
+    books: Vec<RoumanBookCard>,
+    has_next: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RoumanBookDetails {
+    id: String,
+    title: String,
+    cover_url: Option<String>,
+    description: String,
+    chapters: Vec<RoumanChapterLink>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RoumanChapterLink { index: u32, name: String, url: String }
+
+fn rouman_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(22))
+        .user_agent("MangaHub/0.5.9 (public catalog reader)")
+        .build().map_err(|e| e.to_string())
+}
+
+async fn rouman_html(url: Url) -> Result<String, String> {
+    let response = rouman_client()?.get(url).send().await
+        .map_err(|e| format!("網站連線失敗：{e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Rouman5 HTTP {}（請遵守網站存取限制）", response.status()));
+    }
+    let kind = response.headers().get(reqwest::header::CONTENT_TYPE)
+        .and_then(|h| h.to_str().ok()).unwrap_or("").to_string();
+    if !kind.contains("text/html") { return Err("來源回應不是 HTML".into()); }
+    if response.content_length().unwrap_or(0) > 5_000_000 { return Err("HTML 超過大小限制".into()); }
+    let html = response.text().await.map_err(|e| e.to_string())?;
+    if html.len() > 5_000_000 { return Err("HTML 超過大小限制".into()); }
+    Ok(html)
+}
+
+fn rouman_book_id_from_href(href: &str) -> Option<String> {
+    let path = if href.starts_with("https://rouman5.com/") {
+        Url::parse(href).ok()?.path().to_string()
+    } else { href.split(['?', '#']).next()?.to_string() };
+    let mut parts = path.trim_matches('/').split('/');
+    if parts.next()? != "books" { return None; }
+    let id = parts.next()?;
+    if parts.next().is_some() || id.len() < 8 || id.len() > 80
+        || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') { return None; }
+    Some(id.to_string())
+}
+
+fn rouman_cover(element: &scraper::ElementRef<'_>) -> Option<String> {
+    let img = Selector::parse("img").ok()?;
+    let node = element.select(&img).next()?;
+    let src = node.value().attr("data-src")
+        .or_else(|| node.value().attr("src"))?;
+    let src = if src.starts_with("//") { format!("https:{src}") }
+        else if src.starts_with('/') { format!("https://rouman5.com{src}") }
+        else { src.to_string() };
+    let u = Url::parse(&src).ok()?;
+    if u.scheme() != "https" || u.port().is_some() || !u.username().is_empty() { return None; }
+    Some(u.to_string())
+}
+
+fn parse_rouman_catalog(html: &str, mode: &str, page: u32) -> RoumanCatalog {
+    use scraper::ElementRef;
+    use std::collections::HashSet;
+    let doc = Html::parse_document(html);
+    let mut section = "全部漫畫".to_string();
+    let mut books = Vec::new();
+    let mut seen = HashSet::<(String, String)>::new();
+    // Traverse in document order to associate homepage cards with their
+    // visible ranking section, without reverse engineering internal APIs.
+    for node in doc.root_element().descendants() {
+        let Some(el) = ElementRef::wrap(node) else { continue; };
+        let tag = el.value().name();
+        if mode == "home" && matches!(tag, "h1" | "h2" | "h3") {
+            let heading = el.text().collect::<String>().trim().to_string();
+            if ["正熱門", "今日最佳", "最近更新", "本週熱門", "已完結"].iter().any(|t| heading.contains(t)) {
+                section = heading;
+            }
+        }
+        if tag != "a" { continue; }
+        let Some(href) = el.value().attr("href") else { continue; };
+        let Some(id) = rouman_book_id_from_href(href) else { continue; };
+        let img_alt = Selector::parse("img").ok().and_then(|q| {
+            el.select(&q).next().and_then(|img| img.value().attr("alt"))
+                .map(|alt| alt.trim().to_string())
+        }).unwrap_or_default();
+        let text = el.text().collect::<Vec<_>>().join(" ");
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let title = if !img_alt.is_empty() { img_alt } else {
+            text.split("至:").next().unwrap_or("").trim().to_string()
+        };
+        if title.is_empty() || !seen.insert((id.clone(), section.clone())) { continue; }
+        books.push(RoumanBookCard {
+            id: id.clone(), title, url: format!("https://rouman5.com/books/{id}"),
+            cover_url: rouman_cover(&el), section: section.clone(),
+        });
+        if books.len() >= 180 { break; }
+    }
+    let has_next = mode != "home" && !books.is_empty() && html.contains("下一頁");
+    RoumanCatalog { mode: mode.into(), page, books, has_next }
+}
+
+#[command]
+async fn browse_rouman_catalog(mode: String, page: u32) -> Result<RoumanCatalog, String> {
+    if page > 1000 { return Err("頁碼超出限制".into()); }
+    let mut url = match mode.as_str() {
+        "home" => Url::parse("https://rouman5.com/home").unwrap(),
+        "all" | "ongoing" | "completed" => Url::parse("https://rouman5.com/books").unwrap(),
+        _ => return Err("不支援的目錄類型".into()),
+    };
+    if mode == "home" && page != 0 { return Err("首頁不支援分頁".into()); }
+    if mode != "home" {
+        url.query_pairs_mut().append_pair("page", &page.to_string()).append_pair("continued",
+            match mode.as_str() { "ongoing" => "true", "completed" => "false", _ => "" });
+    }
+    let html = rouman_html(url).await?;
+    let result = parse_rouman_catalog(&html, &mode, page);
+    if result.books.is_empty() { return Err("目錄未取得作品卡片，可能是網站 HTML 已變更".into()); }
+    Ok(result)
+}
+
+#[command]
+async fn inspect_rouman_book(book_id: String) -> Result<RoumanBookDetails, String> {
+    if book_id.len() < 8 || book_id.len() > 80
+        || !book_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+        return Err("作品 ID 格式不正確".into());
+    }
+    let url = Url::parse(&format!("https://rouman5.com/books/{book_id}"))
+        .map_err(|e| e.to_string())?;
+    let html = rouman_html(url).await?;
+    let doc = Html::parse_document(&html);
+    let select = |q: &str| Selector::parse(q).ok();
+    let title = select("h1").and_then(|q| {
+        doc.select(&q).next().map(|el| el.text().collect::<Vec<_>>().join(" ").trim().to_string())
+    }).filter(|s| !s.is_empty()).or_else(|| {
+        select("meta[property='og:title']").and_then(|q| {
+            doc.select(&q).next().and_then(|el| el.value().attr("content")).map(str::to_owned)
+        })
+    }).unwrap_or_else(|| book_id.clone());
+    let cover_url = select("meta[property='og:image']").and_then(|q| {
+        doc.select(&q).next().and_then(|el| el.value().attr("content"))
+            .and_then(|s| Url::parse(s).ok()).filter(|u| u.scheme() == "https").map(|u| u.to_string())
+    });
+    let description = select("meta[name='description']").and_then(|q| {
+        doc.select(&q).next().and_then(|el| el.value().attr("content")).map(str::to_owned)
+    }).unwrap_or_default();
+    let links = select("a[href]").ok_or("無法解析頁面連結")?;
+    let mut chapters = Vec::new();
+    let mut seen = std::collections::HashSet::<u32>::new();
+    for el in doc.select(&links) {
+        let Some(href) = el.value().attr("href") else { continue; };
+        let path = href.split(['?', '#']).next().unwrap_or("");
+        let prefix = format!("/books/{book_id}/");
+        let suffix = if let Some(s) = path.strip_prefix(&prefix) { s }
+            else if let Some(s) = path.strip_prefix(&format!("https://rouman5.com{prefix}")) { s }
+            else { continue; };
+        let Ok(index) = suffix.parse::<u32>() else { continue; };
+        if index > 9999 || !seen.insert(index) { continue; }
+        let text = el.text().collect::<Vec<_>>().join(" ");
+        let text = text.trim();
+        chapters.push(RoumanChapterLink {
+            index, name: if text.is_empty() { format!("第 {} 話", index+1) } else { text.into() },
+            url: format!("https://rouman5.com/books/{book_id}/{index}"),
+        });
+        if chapters.len() >= 1000 { break; }
+    }
+    chapters.sort_by_key(|ch| ch.index);
+    if chapters.is_empty() { return Err("作品頁未找到章節連結，請確認作品是否可公開閱讀".into()); }
+    Ok(RoumanBookDetails { id: book_id, title, cover_url, description, chapters })
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![inspect_rouman_chapter, inspect_comicbox_chapter, probe_comicbox_image, probe_comicbox_pair, fetch_nh_gallery, browse_nh_catalog, list_nh_taxonomy, random_nh_gallery, related_nh_galleries, nh_connect, nh_disconnect, nh_session, nh_account_favorites, nh_account_blacklist, nh_account_random_favorite, nh_toggle_remote_favorite, nh_gallery_comments])
+        .invoke_handler(tauri::generate_handler![browse_rouman_catalog, inspect_rouman_book, inspect_rouman_chapter, inspect_comicbox_chapter, probe_comicbox_image, probe_comicbox_pair, fetch_nh_gallery, browse_nh_catalog, list_nh_taxonomy, random_nh_gallery, related_nh_galleries, nh_connect, nh_disconnect, nh_session, nh_account_favorites, nh_account_blacklist, nh_account_random_favorite, nh_toggle_remote_favorite, nh_gallery_comments])
         .run(tauri::generate_context!())
         .expect("error while running MangaHub");
 }
