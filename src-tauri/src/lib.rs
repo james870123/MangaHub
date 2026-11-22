@@ -411,33 +411,44 @@ fn nh_title(data: &Value) -> String {
         if let Some(t) = v.as_str() { return Some(t); }
         ["pretty", "english", "japanese"].iter()
             .find_map(|key| v.get(*key).and_then(Value::as_str).filter(|s| !s.trim().is_empty()))
-    }).unwrap_or("未命名作品");
+    }).or_else(|| data.get("english_title").and_then(Value::as_str))
+      .or_else(|| data.get("japanese_title").and_then(Value::as_str))
+      .unwrap_or("未命名作品");
     title.chars().take(240).collect()
 }
 fn nh_safe_cover(path: &str) -> Option<String> {
-    if path.starts_with("https://") {
+    // Accept the official list API's thumbnail string as well as the
+    // gallery detail API's cover.path / thumbnail.path shapes.
+    let normalized = if path.starts_with("https://") {
         let u = Url::parse(path).ok()?;
         if u.host_str() != Some("t.nhentai.net") || u.port().is_some()
             || !u.username().is_empty() || u.password().is_some()
             || u.query().is_some() || u.fragment().is_some() { return None; }
-        return Some(u.to_string());
-    }
-    let path = path.trim_start_matches('/');
-    let bits: Vec<_> = path.split('/').collect();
+        u.path().trim_start_matches('/').to_string()
+    } else {
+        path.trim_start_matches('/').to_string()
+    };
+    let bits: Vec<_> = normalized.split('/').collect();
     if bits.len() != 3 || bits[0] != "galleries" || bits[1].is_empty()
         || !bits[1].bytes().all(|b| b.is_ascii_digit()) { return None; }
     let (stem, ext) = bits[2].rsplit_once('.')?;
     if !matches!(stem, "cover" | "thumb") || !matches!(ext, "jpg" | "png" | "webp" | "avif") { return None; }
-    Some(format!("https://t.nhentai.net/{path}"))
+    Some(format!("https://t.nhentai.net/{normalized}"))
 }
 fn nh_cover(data: &Value) -> Option<String> {
-    let path = data.pointer("/cover/path")
-        .or_else(|| data.pointer("/images/cover/path"))
-        .or_else(|| data.get("cover_path"))
-        .or_else(|| data.get("cover_url"))
-        .or_else(|| data.pointer("/cover/url"))
-        .and_then(Value::as_str);
-    path.and_then(nh_safe_cover)
+    // The v2 compact gallery list exposes `thumbnail` as a string;
+    // detail responses can instead use nested cover/thumbnail objects.
+    let paths = [
+        data.pointer("/thumbnail/path"),
+        data.get("thumbnail"),
+        data.pointer("/cover/path"),
+        data.pointer("/images/cover/path"),
+        data.get("cover_path"),
+        data.get("cover_url"),
+        data.pointer("/cover/url"),
+    ];
+    paths.iter().filter_map(|value| value.and_then(Value::as_str))
+        .find_map(nh_safe_cover)
 }
 fn nh_tags(data: &Value) -> Vec<String> {
     data.get("tags").and_then(Value::as_array).map(|items| items.iter()
@@ -486,7 +497,12 @@ async fn nh_get_json(client: &reqwest::Client, url: Url) -> Result<Value, String
     let response = client.get(url).header(reqwest::header::ACCEPT, "application/json")
         .send().await.map_err(|e| format!("API 連線失敗：{e}"))?;
     if !response.status().is_success() {
-        return Err(format!("API HTTP {}；403／429 請停止重試並遵守網站限制", response.status().as_u16()));
+        let status = response.status().as_u16();
+        return Err(match status {
+            403 => "API HTTP 403 Forbidden：來源拒絕清單請求，請稍後再試或使用已能閱讀的 Gallery ID。".to_string(),
+            429 => "API HTTP 429 Too Many Requests：已被來源限流，請停止重新整理並等待來源恢復。".to_string(),
+            _ => format!("API HTTP {status}：作品清單請求失敗。"),
+        });
     }
     if response.content_length().unwrap_or(0) > 3_000_000 { return Err("API 回應過大".into()); }
     let bytes = response.bytes().await.map_err(|e| format!("讀取 API 失敗：{e}"))?;
@@ -528,6 +544,12 @@ mod nh_catalog_tests {
         assert_eq!(result.items[0].cover_url.as_deref(), Some("https://t.nhentai.net/galleries/123/cover.jpg"));
         assert!(result.has_next);
         assert!(nh_safe_cover("https://evil.test/cover.jpg").is_none());
+        let compact = serde_json::json!({"id": 456, "english_title": "Compact list title", "thumbnail": "galleries/345/thumb.webp", "num_pages": 8});
+        let compact_item = parse_nh_list_item(&compact).unwrap();
+        assert_eq!(compact_item.title, "Compact list title");
+        assert_eq!(compact_item.cover_url.as_deref(), Some("https://t.nhentai.net/galleries/345/thumb.webp"));
+        let direct_thumb = serde_json::json!({"id": 789, "english_title": "URL thumbnail", "thumbnail": "https://t.nhentai.net/galleries/678/thumb.jpg"});
+        assert!(parse_nh_list_item(&direct_thumb).unwrap().cover_url.is_some());
     }
 }
 
