@@ -41,9 +41,11 @@ function ReaderImage({ src, index, eager, onVisible }: { src: string; index: num
   }, [index, onVisible]);
   return <div className="mh-image-slot" ref={node} data-page={index + 1}>
     {observed ? <>
-      <img key={`${src}-${attempt}`} src={src} loading={eager ? 'eager' : 'lazy'}
+      <img key={`${src}-${attempt}`} src={src} loading={repairStrips ? 'eager' : (eager ? 'eager' : 'lazy')}
         decoding="async" referrerPolicy="no-referrer" alt={`漫畫第 ${index + 1} 頁`}
-        style={repairStrips ? { display: 'none' } : undefined}
+        // Keep the image in layout to reserve its real height for the canvas.
+        // display:none + native lazy loading can leave invisible 80px slots.
+        style={repairStrips ? { visibility: 'hidden' } : undefined}
         onLoad={(event) => {
           if (repairStrips) {
             try {
@@ -55,7 +57,7 @@ function ReaderImage({ src, index, eager, onVisible }: { src: string; index: num
         }}
         onError={() => setState('failed')}/>
       {repairStrips && <canvas ref={canvasNode} aria-label={`漫畫第 ${index + 1} 頁`}
-        role="img" style={{ display: state === 'ready' ? 'block' : 'none', width: '100%', height: 'auto' }}/>} 
+        role="img" style={{ position: 'absolute', inset: 0, display: state === 'ready' ? 'block' : 'none', width: '100%', height: '100%' }}/>} 
     </> : <div className="mh-placeholder">第 {index + 1} 頁 · 等待載入</div>}
     {observed && state === 'failed' && <div className="mh-load-error"><AlertCircle size={19}/><strong>第 {index + 1} 頁載入失敗</strong><small>可能是跨來源、存取權限、失效連結或圖片格式問題。</small><button onClick={() => { setState('loading'); setAttempt(n => n + 1); }}><RotateCcw size={15}/> 重試</button></div>}
   </div>;
