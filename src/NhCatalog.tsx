@@ -55,20 +55,34 @@ export default function NhCatalog(props: Props) {
   const [searchKind, setSearchKind] = useState('');
   const [searchValue, setSearchValue] = useState('');
 
+  // Search is useful before a keyword is entered: default to the newest public
+  // catalog, or today's popular public catalog, without making an invalid
+  // /api/v2/search request with an empty query.
+  const searchHasQuery = submitted.trim().length > 0;
+  const browseMode: 'latest' | 'popular' | 'search' = mode === 'search' && !searchHasQuery
+    ? (sort === 'popular-today' ? 'popular' : 'latest')
+    : mode === 'popular' ? 'popular' : mode === 'search' ? 'search' : 'latest';
+
   useEffect(() => {
-    if (!adultConfirmed || mode === 'favorites' || mode === 'history' || (mode === 'search' && !submitted)) return;
+    if (!adultConfirmed || mode === 'favorites' || mode === 'history') return;
     let cancelled = false;
     setLoading(true);
     setError('');
     setResult(null);
-    void invoke<CatalogPage>('browse_nh_catalog', { mode, query: submitted, sort, page })
+    void invoke<CatalogPage>('browse_nh_catalog', { mode: browseMode, query: submitted, sort, page })
       .then(value => { if (!cancelled) setResult(value); })
       .catch(err => { if (!cancelled) setError(String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [adultConfirmed, mode, submitted, sort, page, refresh]);
+  }, [adultConfirmed, mode, browseMode, submitted, sort, page, refresh]);
 
-  const changeMode = (next: Mode) => { setMode(next); setPage(1); setDetail(null); setError(''); };
+  const changeMode = (next: Mode) => {
+    setMode(next);
+    setPage(1);
+    setDetail(null);
+    setError('');
+    if (next === 'search' && !submitted.trim()) setSort('date');
+  };
   const openDetail = useCallback(async (item: CatalogItem) => {
     setSelection(item); setDetail(null); setDetailError(''); setDetailLoading(true); setRelated([]); setRelatedError('');
     try {
@@ -132,8 +146,8 @@ export default function NhCatalog(props: Props) {
       {(mode === 'latest' || mode === 'popular' || mode === 'search') && <button className="secondaryButton" disabled={loading} onClick={() => setRefresh(n => n + 1)}><RefreshCw size={17}/> 重新整理</button>}
     </div>
     {mode === 'search' && <form className="urlbox" onSubmit={e => { e.preventDefault(); setPage(1); setSubmitted(searchText.trim()); }}>
-      <Search size={18}/><input aria-label="搜尋標題或標籤" placeholder="搜尋標題、作者或標籤" value={searchText} onChange={e => setSearchText(e.target.value)}/>
-      <button disabled={!searchText.trim() || loading}>搜尋</button>
+      <Search size={18}/><input aria-label="搜尋標題或標籤" placeholder="搜尋標題、作者或標籤（可留空瀏覽最新）" value={searchText} onChange={e => setSearchText(e.target.value)}/>
+      <button disabled={loading}>{searchText.trim() ? '搜尋' : '顯示最新'}</button>
     </form>}
     {mode === 'search' && <div className="catalogQueryTools">
       <label>進階條件 <select value={searchKind} onChange={e => setSearchKind(e.target.value)}>
@@ -142,11 +156,13 @@ export default function NhCatalog(props: Props) {
       <input aria-label="進階搜尋值" placeholder="作者、語言或標籤" value={searchValue} onChange={e => setSearchValue(e.target.value)}/>
       <button className="secondaryButton" onClick={submitAdvancedSearch}>套用條件</button>
     </div>}
-    {mode === 'search' && <div className="catalogSort"><label>排序 <select value={sort} onChange={e => { setSort(e.target.value as Sort); setPage(1); }}>{sorting.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}</select></label></div>}
+    {mode === 'search' && <div className="catalogSort"><label>排序 <select value={sort} onChange={e => { setSort(e.target.value as Sort); setPage(1); }}>{sorting.map(option => <option key={option.value} value={option.value} disabled={!searchHasQuery && option.value !== 'date' && option.value !== 'popular-today'}>{option.label}{!searchHasQuery && option.value !== 'date' && option.value !== 'popular-today' ? '（需關鍵字）' : ''}</option>)}</select></label>
+      {!searchHasQuery && <p className="detailNote">尚未輸入關鍵字：可直接瀏覽「最新」與「今日熱門」。其他熱門排序需要先搜尋作品。</p>}
+    </div>}
     {mode === 'popular' && <div className="notice"><Star size={18}/><div><b>今日熱門</b><p>使用來源 API 的熱門作品端點。若要搜尋「全部熱門／本週熱門」，請到搜尋頁選擇對應排序。</p></div></div>}
     {loading && <div className="catalogStatus"><LoaderCircle className="spin" size={24}/> 正在讀取作品資訊…</div>}
     {error && <div className="error"><strong>無法取得目錄</strong><p>{error}</p><small>遇到 403／429 不會自動重試。請遵守來源站的請求限制。</small></div>}
-    {!loading && !error && visibleItems.length === 0 && <div className="empty"><BookOpen size={34}/><h2>{mode === 'search' && !submitted ? '輸入關鍵字開始搜尋' : '目前沒有作品'}</h2><p>{mode === 'favorites' ? '點選漫畫詳情中的收藏按鈕即可加入。' : mode === 'history' ? '開始閱讀後，作品會出現在這裡。' : '可嘗試其他搜尋關鍵字或稍後重新整理。'}</p></div>}
+    {!loading && !error && visibleItems.length === 0 && <div className="empty"><BookOpen size={34}/><h2>目前沒有作品</h2><p>{mode === 'favorites' ? '點選漫畫詳情中的收藏按鈕即可加入。' : mode === 'history' ? '開始閱讀後，作品會出現在這裡。' : '可嘗試其他搜尋關鍵字或稍後重新整理。'}</p></div>}
     {blockedTags.length>0 && <p className="catalogBlockedNotice">已啟用 {blockedTags.length} 個黑名單標籤（僅篩選 API 已提供標籤的作品）</p>}
     <div className="catalogGrid">{filteredItems.map(item => <article key={item.id} className="catalogCard">
       <button className="catalogCardMain" onClick={() => void openDetail(item)} aria-label={`查看 ${item.title}`}>
@@ -155,7 +171,7 @@ export default function NhCatalog(props: Props) {
       </button>
       <button className="catalogHeart" aria-label={favorites.some(f => f.id === item.id) ? '取消收藏' : '收藏'} onClick={() => onToggleFavorite(item)}><Heart size={18} fill={favorites.some(f => f.id === item.id) ? 'currentColor' : 'none'}/></button>
     </article>)}</div>
-    {(mode === 'latest' || mode === 'search') && result && <div className="catalogPager">
+    {(mode === 'latest' || (mode === 'search' && browseMode !== 'popular')) && result && <div className="catalogPager">
       <button disabled={page <= 1 || loading} onClick={() => setPage(n => Math.max(1, n - 1))}><ChevronLeft size={18}/> 上一頁</button>
       <span>第 {page} 頁{result.totalPages ? ` / ${result.totalPages} 頁` : ''}</span>
       <form className="catalogPageJump" onSubmit={e => { e.preventDefault(); const n=Number(jumpPage); if(Number.isInteger(n) && n>=1 && n<=Math.min(result.totalPages ?? 1000,1000)) setPage(n); }}>
