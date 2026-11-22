@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, ArrowLeft, ChevronLeft, ChevronRight, ImagePlus, RotateCcw, Trash2, ZoomOut } from 'lucide-react';
+import { drawRoumanImage, needsRoumanStripRepair } from './roumanStripRepair';
 
 type ReadingMode = 'vertical' | 'ltr' | 'rtl';
 type PageStatus = 'idle' | 'loading' | 'ready' | 'failed';
@@ -21,6 +22,8 @@ const hashList = (urls: string[]) => {
 
 function ReaderImage({ src, index, eager, onVisible }: { src: string; index: number; eager: boolean; onVisible?: (index: number) => void }) {
   const node = useRef<HTMLDivElement>(null);
+  const canvasNode = useRef<HTMLCanvasElement>(null);
+  const repairStrips = needsRoumanStripRepair(src);
   const [state, setState] = useState<PageStatus>('idle');
   const [attempt, setAttempt] = useState(0);
   const [observed, setObserved] = useState(eager);
@@ -37,7 +40,23 @@ function ReaderImage({ src, index, eager, onVisible }: { src: string; index: num
     return () => ob.disconnect();
   }, [index, onVisible]);
   return <div className="mh-image-slot" ref={node} data-page={index + 1}>
-    {observed ? <img key={`${src}-${attempt}`} src={src} loading={eager ? 'eager' : 'lazy'} decoding="async" referrerPolicy="no-referrer" alt={`漫畫第 ${index + 1} 頁`} onLoad={() => setState('ready')} onError={() => setState('failed')} onLoadStart={() => setState('loading')} /> : <div className="mh-placeholder">第 {index + 1} 頁 · 等待載入</div>}
+    {observed ? <>
+      <img key={`${src}-${attempt}`} src={src} loading={eager ? 'eager' : 'lazy'}
+        decoding="async" referrerPolicy="no-referrer" alt={`漫畫第 ${index + 1} 頁`}
+        style={repairStrips ? { display: 'none' } : undefined}
+        onLoad={(event) => {
+          if (repairStrips) {
+            try {
+              if (!canvasNode.current) throw new Error('Canvas missing');
+              drawRoumanImage(event.currentTarget, canvasNode.current, src);
+            } catch { setState('failed'); return; }
+          }
+          setState('ready');
+        }}
+        onError={() => setState('failed')}/>
+      {repairStrips && <canvas ref={canvasNode} aria-label={`漫畫第 ${index + 1} 頁`}
+        role="img" style={{ display: state === 'ready' ? 'block' : 'none', width: '100%', height: 'auto' }}/>} 
+    </> : <div className="mh-placeholder">第 {index + 1} 頁 · 等待載入</div>}
     {observed && state === 'failed' && <div className="mh-load-error"><AlertCircle size={19}/><strong>第 {index + 1} 頁載入失敗</strong><small>可能是跨來源、存取權限、失效連結或圖片格式問題。</small><button onClick={() => { setState('loading'); setAttempt(n => n + 1); }}><RotateCcw size={15}/> 重試</button></div>}
   </div>;
 }
