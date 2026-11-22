@@ -29,3 +29,38 @@
 /* v0.3.3 source capability manifest and authorized direct-image gateway */
 .cap-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:26px 0}
 .cap-card{border:1px solid #343640;border-radius:13px;padding:20px;background:#1a1d25}.cap-head{display:flex;align-items:center;gap:10px;color:#dfb1f4}.cap-card dl{margin:15px 0}.cap-card dl>div{display:flex;justify-content:space-between;gap:12px;margin:9px 0}.cap-card dt{font-size:12px;color:#969ba9}.cap-card dd{font-size:12px;margin:0}.cap-card p{font-size:12px;color:#a5a9b5;line-height:1.75}.cap-textarea{resize:vertical;background:#1d2028;color:#eef0f4;border:1px solid #474352;border-radius:12px;padding:14px;width:100%;line-height:1.8}.cap-consent{display:flex;gap:9px;align-items:center;font-size:13px;color:#b8b8c6;margin-top:20px}.cap-consent input{accent-color:#d59af0}@media(max-width:750px){.cap-grid{grid-template-columns:1fr}}
+
+/* v0.5 discovery / local library */
+.catalogPage{max-width:1240px}
+.catalogTabs{display:flex;gap:9px;flex-wrap:wrap;margin:22px 0}
+.catalogTabs button{border:1px solid #3b3548;background:#21232c;color:#c4c3d0;border-radius:10px;padding:11px 17px;font-size:13px}
+.catalogTabs button.on{background:#50345f;color:#fff;border-color:#a779c4}
+.catalogControls{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0}
+.catalogSort{margin:18px 0;color:#bbc0cc;font-size:13px}
+.catalogSort select{background:#262330;color:#fff;border:1px solid #51435e;border-radius:8px;padding:9px;margin-left:10px}
+.catalogGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:17px;margin:24px 0}
+.catalogCard{position:relative;border:1px solid #35333f;border-radius:13px;overflow:hidden;background:#1c2029;min-width:0}
+.catalogCardMain{border:0;background:transparent;color:inherit;padding:0;width:100%;text-align:left;cursor:pointer}
+.catalogCover{height:225px;background:linear-gradient(140deg,#44304e,#191b24);display:grid;place-items:center;color:#d6a5ee;overflow:hidden}
+.catalogCover img{width:100%;height:100%;object-fit:cover}
+.catalogCardText{padding:12px 13px 45px;min-height:113px}
+.catalogCardText strong{font-size:13px;line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.catalogCardText small{font-size:11px;color:#a5a4b4;display:flex;gap:4px;align-items:center;margin-top:8px}
+.catalogHeart{position:absolute;right:10px;bottom:10px;border:1px solid #594661;border-radius:8px;background:#35263d;color:#e6bcfa;padding:8px;cursor:pointer}
+.catalogPager{display:flex;justify-content:center;align-items:center;gap:18px;margin:24px 0}
+.catalogPager button{display:inline-flex;align-items:center;gap:5px;background:#30253b;color:#f1d4ff;border:1px solid #654874;border-radius:8px;padding:10px}
+.catalogPager span{color:#bcc0ca;font-size:12px}
+.catalogStatus{display:flex;gap:10px;align-items:center;padding:20px;color:#c4b4cc}
+.catalogModalShade{position:fixed;inset:0;z-index:45;background:#05050bcb;display:flex;justify-content:center;align-items:center;padding:20px;overflow:auto}
+.catalogModal{position:relative;background:#1d202a;border:1px solid #594766;border-radius:18px;padding:30px;width:min(760px,96vw);max-height:92vh;overflow-y:auto}
+.catalogModal h2{line-height:1.3;overflow-wrap:anywhere;margin:16px 30px 20px 0}
+.catalogClose{position:absolute;top:10px;right:16px;border:0;background:transparent;color:#fff;font-size:32px;cursor:pointer}
+.catalogDetailRow{display:flex;gap:22px}
+.catalogDetailCover{width:190px;height:260px;flex-shrink:0;background:linear-gradient(130deg,#4c2e58,#171b26);display:grid;place-items:center;overflow:hidden;border-radius:12px;color:#d4a0ec}
+.catalogDetailCover img{width:100%;height:100%;object-fit:cover}
+.catalogDetailInfo{flex:1;color:#ccc9d6;font-size:13px;min-width:0}
+.catalogDetailInfo .primary,.catalogDetailInfo .secondaryButton{margin:12px 0;width:fit-content}
+.catalogTags{display:flex;gap:6px;flex-wrap:wrap;margin:20px 0}
+.catalogTags span{background:#302b3a;border-radius:8px;padding:6px 9px;font-size:11px;color:#cdbfd1}
+button:disabled{opacity:.45;cursor:not-allowed}
+@media(max-width:750px){.catalogPage{padding:26px 5%}.catalogGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.catalogCover{height:180px}.catalogCardText{padding:10px 10px 45px}.catalogDetailRow{flex-direction:column}.catalogDetailCover{width:135px;height:180px}.catalogModal{padding:22px}}

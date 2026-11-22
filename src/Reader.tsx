@@ -42,7 +42,7 @@ function ReaderImage({ src, index, eager, onVisible }: { src: string; index: num
   </div>;
 }
 
-export default function Reader({ initialUrls }: { initialUrls?: string[] }) {
+export default function Reader({ initialUrls, onProgress }: { initialUrls?: string[]; onProgress?: (page: number) => void }) {
   const [imageText, setImageText] = useState(() => initialUrls?.join('\n') ?? safeRead(STORAGE_URLS, ''));
   const [mode, setMode] = useState<ReadingMode>(() => {
     const value = safeRead(STORAGE_MODE, 'vertical');
@@ -81,6 +81,10 @@ export default function Reader({ initialUrls }: { initialUrls?: string[] }) {
       localStorage.setItem(STORAGE_PROGRESS, JSON.stringify(data));
     } catch { /* private mode or storage disabled */ }
   }, [sessionKey, sources.length, mode, page, scrollPage]);
+  const onProgressRef = useRef(onProgress);
+  useEffect(() => { onProgressRef.current = onProgress; }, [onProgress]);
+  const currentProgress = mode === 'vertical' ? scrollPage + 1 : page + 1;
+  useEffect(() => { if (sources.length) onProgressRef.current?.(currentProgress); }, [sources.length, currentProgress]);
   const addLocalFiles = (files: FileList | null) => {
     if (!files) return;
     const supported = Array.from(files).filter(f => f.type.startsWith('image/') || /\.(jpg|jpeg|png|webp|avif|gif)$/i.test(f.name));

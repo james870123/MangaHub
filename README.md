@@ -1,3 +1,7 @@
+## v0.5 新功能
+
+請參閱 [UPGRADE_v0.5.md](UPGRADE_v0.5.md)，新增漫畫探索、熱門搜尋、詳情、收藏、最近閱讀與成人內容開關。
+
 # MangaHub v0.3
 
 Tauri 2 + React + TypeScript application. Version 0.3 adds a standalone clean-image reader while retaining ComicBox metadata and chapter navigation from v0.2.

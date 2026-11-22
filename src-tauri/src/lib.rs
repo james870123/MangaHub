@@ -282,6 +282,8 @@ struct NhGallery {
     id: u64,
     title: String,
     page_urls: Vec<String>,
+    cover_url: Option<String>,
+    tags: Vec<String>,
 }
 
 fn nh_gallery_id(input: &str) -> Result<u64, String> {
@@ -338,7 +340,7 @@ fn parse_nh_gallery(data: &Value, requested_id: u64) -> Result<NhGallery, String
             .ok_or("API 頁面缺少 path")?;
         page_urls.push(verified_page_url(path)?);
     }
-    Ok(NhGallery { id, title, page_urls })
+    Ok(NhGallery { id, title, page_urls, cover_url: nh_cover(data), tags: nh_tags(data) })
 }
 
 #[command]
@@ -384,11 +386,156 @@ mod nh_tests {
     }
 }
 
+
+// Catalog API: only documented public v2 endpoints. No credentials, scraping,
+// anti-bot bypass, image downloads, redirects or requests to arbitrary hosts.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NhListItem {
+    id: u64,
+    title: String,
+    cover_url: Option<String>,
+    page_count: usize,
+    tags: Vec<String>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NhCatalogPage {
+    items: Vec<NhListItem>,
+    page: u32,
+    total_pages: Option<u32>,
+    has_next: bool,
+}
+fn nh_title(data: &Value) -> String {
+    let title = data.get("title").and_then(|v| {
+        if let Some(t) = v.as_str() { return Some(t); }
+        ["pretty", "english", "japanese"].iter()
+            .find_map(|key| v.get(*key).and_then(Value::as_str).filter(|s| !s.trim().is_empty()))
+    }).unwrap_or("未命名作品");
+    title.chars().take(240).collect()
+}
+fn nh_safe_cover(path: &str) -> Option<String> {
+    if path.starts_with("https://") {
+        let u = Url::parse(path).ok()?;
+        if u.host_str() != Some("t.nhentai.net") || u.port().is_some()
+            || !u.username().is_empty() || u.password().is_some()
+            || u.query().is_some() || u.fragment().is_some() { return None; }
+        return Some(u.to_string());
+    }
+    let path = path.trim_start_matches('/');
+    let bits: Vec<_> = path.split('/').collect();
+    if bits.len() != 3 || bits[0] != "galleries" || bits[1].is_empty()
+        || !bits[1].bytes().all(|b| b.is_ascii_digit()) { return None; }
+    let (stem, ext) = bits[2].rsplit_once('.')?;
+    if !matches!(stem, "cover" | "thumb") || !matches!(ext, "jpg" | "png" | "webp" | "avif") { return None; }
+    Some(format!("https://t.nhentai.net/{path}"))
+}
+fn nh_cover(data: &Value) -> Option<String> {
+    let path = data.pointer("/cover/path")
+        .or_else(|| data.pointer("/images/cover/path"))
+        .or_else(|| data.get("cover_path"))
+        .or_else(|| data.get("cover_url"))
+        .or_else(|| data.pointer("/cover/url"))
+        .and_then(Value::as_str);
+    path.and_then(nh_safe_cover)
+}
+fn nh_tags(data: &Value) -> Vec<String> {
+    data.get("tags").and_then(Value::as_array).map(|items| items.iter()
+        .filter_map(|item| item.get("name").and_then(Value::as_str)
+            .or_else(|| item.as_str()))
+        .filter(|name| !name.is_empty())
+        .take(20).map(|s| s.chars().take(60).collect()).collect()).unwrap_or_default()
+}
+fn parse_nh_list_item(v: &Value) -> Option<NhListItem> {
+    let id = v.get("id").and_then(Value::as_u64).filter(|&x| x > 0)?;
+    let page_count = v.get("num_pages").or_else(|| v.get("page_count"))
+        .and_then(Value::as_u64).map(|v| v.min(1000) as usize)
+        .or_else(|| v.get("pages").and_then(Value::as_array).map(Vec::len))
+        .unwrap_or(0);
+    Some(NhListItem { id, title: nh_title(v), cover_url: nh_cover(v), page_count, tags: nh_tags(v) })
+}
+fn parse_nh_catalog(v: &Value, page: u32) -> Result<NhCatalogPage, String> {
+    let arr = if let Some(arr) = v.as_array() { Some(arr) } else {
+        v.get("items").or_else(|| v.get("results")).or_else(|| v.get("galleries"))
+            .or_else(|| v.get("data")).and_then(Value::as_array)
+    }.ok_or("API 清單結構未辨識，請保留錯誤資訊供相容性修正")?;
+    let items = arr.iter().take(100).filter_map(parse_nh_list_item).collect::<Vec<_>>();
+    let total_pages = v.get("total_pages").or_else(|| v.get("totalPages"))
+        .and_then(Value::as_u64).map(|x| x.min(100000) as u32)
+        .or_else(|| {
+            let total = v.get("total").and_then(Value::as_u64)?;
+            let per_page = v.get("per_page").and_then(Value::as_u64).unwrap_or(25).max(1);
+            Some((total.saturating_add(per_page - 1) / per_page).min(100000) as u32)
+        });
+    let has_next = v.get("has_next").and_then(Value::as_bool)
+        .or_else(|| total_pages.map(|max| page < max))
+        .unwrap_or(items.len() >= 25);
+    Ok(NhCatalogPage { items, page, total_pages, has_next })
+}
+fn nh_api_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(18))
+        .user_agent("MangaHub/0.5 (public gallery catalog)")
+        .build().map_err(|e| e.to_string())
+}
+async fn nh_get_json(client: &reqwest::Client, url: Url) -> Result<Value, String> {
+    if url.scheme() != "https" || url.host_str() != Some("nhentai.net") || url.port().is_some() {
+        return Err("不允許的 API 網域".into());
+    }
+    let response = client.get(url).header(reqwest::header::ACCEPT, "application/json")
+        .send().await.map_err(|e| format!("API 連線失敗：{e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("API HTTP {}；403／429 請停止重試並遵守網站限制", response.status().as_u16()));
+    }
+    if response.content_length().unwrap_or(0) > 3_000_000 { return Err("API 回應過大".into()); }
+    let bytes = response.bytes().await.map_err(|e| format!("讀取 API 失敗：{e}"))?;
+    if bytes.len() > 3_000_000 { return Err("API 回應過大".into()); }
+    serde_json::from_slice(&bytes).map_err(|_| "API 沒有回傳有效 JSON".to_string())
+}
+#[command]
+async fn browse_nh_catalog(mode: String, query: String, sort: String, page: u32) -> Result<NhCatalogPage, String> {
+    if page == 0 || page > 1000 { return Err("頁碼必須介於 1～1000".into()); }
+    let mut url = match mode.as_str() {
+        "latest" => Url::parse("https://nhentai.net/api/v2/galleries").unwrap(),
+        "popular" => Url::parse("https://nhentai.net/api/v2/galleries/popular").unwrap(),
+        "search" => Url::parse("https://nhentai.net/api/v2/search").unwrap(),
+        _ => return Err("未知清單模式".into()),
+    };
+    if mode == "search" {
+        let query = query.trim();
+        if query.is_empty() || query.chars().count() > 120 { return Err("搜尋文字請介於 1～120 字".into()); }
+        if !matches!(sort.as_str(), "date" | "popular" | "popular-today" | "popular-week" | "popular-month") { return Err("未知排序方式".into()); }
+        url.query_pairs_mut().append_pair("query", query).append_pair("sort", &sort).append_pair("page", &page.to_string());
+    } else if mode == "latest" {
+        url.query_pairs_mut().append_pair("page", &page.to_string());
+    } else if page != 1 {
+        return Err("熱門專區僅支援第 1 頁".into());
+    }
+    let client = nh_api_client()?;
+    let body = nh_get_json(&client, url).await?;
+    parse_nh_catalog(&body, page)
+}
+
+#[cfg(test)]
+mod nh_catalog_tests {
+    use super::*;
+    #[test]
+    fn list_parsing_and_cover_validation() {
+        let data = serde_json::json!({"items":[{"id":123,"title":{"pretty":"Demo"},"cover":{"path":"galleries/123/cover.jpg"},"num_pages":10}],"total_pages":3});
+        let result = parse_nh_catalog(&data, 1).unwrap();
+        assert_eq!(result.items[0].title, "Demo");
+        assert_eq!(result.items[0].cover_url.as_deref(), Some("https://t.nhentai.net/galleries/123/cover.jpg"));
+        assert!(result.has_next);
+        assert!(nh_safe_cover("https://evil.test/cover.jpg").is_none());
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![inspect_comicbox_chapter, probe_comicbox_image, probe_comicbox_pair, fetch_nh_gallery])
+        .invoke_handler(tauri::generate_handler![inspect_comicbox_chapter, probe_comicbox_image, probe_comicbox_pair, fetch_nh_gallery, browse_nh_catalog])
         .run(tauri::generate_context!())
         .expect("error while running MangaHub");
 }
