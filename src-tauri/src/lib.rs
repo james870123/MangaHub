@@ -536,6 +536,61 @@ async fn browse_nh_catalog(mode: String, query: String, sort: String, page: u32)
 }
 
 
+// Public taxonomy directory endpoint, as documented by the v2 API.
+// One page at a time; no scraping, arbitrary hosts, or credential forwarding.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NhTaxonomyItem { id: Option<u64>, name: String, count: Option<u64>, r#type: String }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NhTaxonomyPage { items: Vec<NhTaxonomyItem>, page: u32, total_pages: Option<u32>, has_next: bool }
+fn parse_nh_taxonomy(body: &Value, kind: &str, page: u32) -> Result<NhTaxonomyPage, String> {
+    let entries = body.as_array()
+        .or_else(|| body.get("result").and_then(Value::as_array))
+        .or_else(|| body.get("items").and_then(Value::as_array))
+        .or_else(|| body.get("results").and_then(Value::as_array))
+        .or_else(|| body.get("tags").and_then(Value::as_array))
+        .or_else(|| body.get("data").and_then(Value::as_array))
+        .or_else(|| body.pointer("/data/items").and_then(Value::as_array))
+        .or_else(|| body.pointer("/data/result").and_then(Value::as_array))
+        .ok_or_else(|| "無法辨識官方分類目錄回應格式".to_string())?;
+    let items = entries.iter().take(100).filter_map(|entry| {
+        let name = entry.get("name").or_else(|| entry.get("slug")).and_then(Value::as_str)
+            .or_else(|| entry.as_str())?.trim();
+        if name.is_empty() { return None; }
+        Some(NhTaxonomyItem {
+            id: entry.get("id").and_then(Value::as_u64),
+            name: name.chars().take(90).collect(),
+            count: entry.get("count").or_else(|| entry.get("num_galleries")).or_else(|| entry.get("gallery_count")).and_then(Value::as_u64),
+            r#type: kind.to_owned(),
+        })
+    }).collect::<Vec<_>>();
+    let total_pages = body.get("total_pages").or_else(|| body.get("totalPages")).and_then(Value::as_u64)
+        .or_else(|| body.pointer("/pagination/total_pages").and_then(Value::as_u64))
+        .or_else(|| {
+            let total = body.get("total").and_then(Value::as_u64)?;
+            let per = body.get("per_page").and_then(Value::as_u64).unwrap_or(25).max(1);
+            Some(total.saturating_add(per-1)/per)
+        }).map(|n| n.min(1000) as u32);
+    let has_next = body.get("has_next").and_then(Value::as_bool)
+        .or_else(|| body.pointer("/pagination/has_next").and_then(Value::as_bool))
+        .or_else(|| total_pages.map(|total| page < total))
+        .unwrap_or(items.len() >= 25);
+    Ok(NhTaxonomyPage { items, page, total_pages, has_next })
+}
+#[command]
+async fn list_nh_taxonomy(kind: String, page: u32) -> Result<NhTaxonomyPage, String> {
+    if !matches!(kind.as_str(), "tag" | "artist" | "group" | "character" | "parody" | "language" | "category") {
+        return Err("不支援的分類類型".into());
+    }
+    if !(1..=1000).contains(&page) { return Err("分類頁碼必須介於 1～1000".into()); }
+    let mut url = Url::parse(&format!("https://nhentai.net/api/v2/tags/{kind}")).map_err(|e| e.to_string())?;
+    url.query_pairs_mut().append_pair("page", &page.to_string());
+    let client = nh_api_client()?;
+    let body = nh_get_json(&client, url).await?;
+    parse_nh_taxonomy(&body, &kind, page)
+}
+
 // Public, read-only user-facing API endpoints. Never authenticate or bypass rate limits.
 #[command]
 async fn random_nh_gallery() -> Result<u64, String> {
@@ -739,7 +794,7 @@ async fn nh_gallery_comments(gallery_id:u64, page:u32) -> Result<Value,String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![inspect_comicbox_chapter, probe_comicbox_image, probe_comicbox_pair, fetch_nh_gallery, browse_nh_catalog, random_nh_gallery, related_nh_galleries, nh_connect, nh_disconnect, nh_session, nh_account_favorites, nh_account_blacklist, nh_account_random_favorite, nh_toggle_remote_favorite, nh_gallery_comments])
+        .invoke_handler(tauri::generate_handler![inspect_comicbox_chapter, probe_comicbox_image, probe_comicbox_pair, fetch_nh_gallery, browse_nh_catalog, list_nh_taxonomy, random_nh_gallery, related_nh_galleries, nh_connect, nh_disconnect, nh_session, nh_account_favorites, nh_account_blacklist, nh_account_random_favorite, nh_toggle_remote_favorite, nh_gallery_comments])
         .run(tauri::generate_context!())
         .expect("error while running MangaHub");
 }

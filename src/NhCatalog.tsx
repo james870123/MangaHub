@@ -32,6 +32,8 @@ const sorting: { value: Sort; label: string }[] = [
 const infoForRecord = (r: ReadingRecord): CatalogItem => ({ id: r.id, title: r.title, coverUrl: r.coverUrl, pageCount: r.total, tags: [] });
 type CategoryKind = 'language' | 'category' | 'artist' | 'group' | 'character' | 'parody' | 'tag';
 type CategoryFilter = { kind: CategoryKind; value: string };
+type DirectoryTag = { id: number | null; name: string; count: number | null; type: string };
+type TagDirectoryPage = { items: DirectoryTag[]; page: number; totalPages: number | null; hasNext: boolean };
 const categoryKinds: { kind: CategoryKind; label: string; hint: string }[] = [
   { kind: 'language', label: '語言', hint: '例如 japanese / english / chinese' },
   { kind: 'category', label: '類型', hint: '例如 manga / doujinshi' },
@@ -81,8 +83,28 @@ export default function NhCatalog(props: Props) {
   const [categoryFilters, setCategoryFilters] = useState<CategoryFilter[]>([]);
   const [categoryKind, setCategoryKind] = useState<CategoryKind>('language');
   const [categoryValue, setCategoryValue] = useState('');
+  const [directoryKind, setDirectoryKind] = useState<CategoryKind>('tag');
+  const [directoryPage, setDirectoryPage] = useState(1);
+  const [directoryData, setDirectoryData] = useState<TagDirectoryPage | null>(null);
+  const [directoryLoading, setDirectoryLoading] = useState(false);
+  const [directoryError, setDirectoryError] = useState('');
+  const [directoryFilter, setDirectoryFilter] = useState('');
+  const [directoryRefresh, setDirectoryRefresh] = useState(0);
   const categoryQuery = categoryFilters.map(categoryTerm).join(' ');
   const categoryHasQuery = categoryFilters.length > 0;
+  // API-backed directory. Fetch only the selected taxonomy type and one page.
+  useEffect(() => {
+    if (!adultConfirmed || mode !== 'categories') return;
+    let cancelled = false;
+    setDirectoryLoading(true); setDirectoryError(''); setDirectoryData(null);
+    void invoke<TagDirectoryPage>('list_nh_taxonomy', { kind: directoryKind, page: directoryPage })
+      .then(data => { if (!cancelled) setDirectoryData(data); })
+      .catch(err => { if (!cancelled) setDirectoryError(String(err)); })
+      .finally(() => { if (!cancelled) setDirectoryLoading(false); });
+    return () => { cancelled = true; };
+  }, [adultConfirmed, mode, directoryKind, directoryPage, directoryRefresh]);
+  const visibleDirectoryTags = (directoryData?.items ?? []).filter(tag =>
+    tag.name.toLowerCase().includes(directoryFilter.trim().toLowerCase()));
   function toggleCategory(kind: CategoryKind, value: string) {
     const clean = value.replace(/["\\]/g, '').trim().replace(/\s+/g, ' ').slice(0, 80);
     if (!clean) return;
@@ -174,7 +196,7 @@ export default function NhCatalog(props: Props) {
   </section>;
 
   return <section className="content catalogPage">
-    <div className="pill">MANGAHUB · DISCOVER v0.5</div>
+    <div className="pill">MANGAHUB · DISCOVER v0.5.7</div>
     <h1>探索<span>漫畫</span></h1>
     <p className="lead">瀏覽最新、熱門、搜尋與本機書架。封面預設隱藏，只有你允許時才顯示。</p>
     <div className="catalogTabs">
@@ -202,7 +224,7 @@ export default function NhCatalog(props: Props) {
       {!searchHasQuery && <p className="detailNote">尚未輸入關鍵字：可直接瀏覽「最新」與「今日熱門」。其他熱門排序需要先搜尋作品。</p>}
     </div>}
     {mode === 'categories' && <div className="categoryBrowser">
-      <div className="notice"><BookOpen size={19}/><div><b>依分類探索作品</b><p>可選多個條件組合查詢。例如「日文 + 漫畫」，或「作者 + 語言」。分類條件透過既有的官方搜尋 API 查詢，並非離線建立的完整標籤目錄。</p></div></div>
+      <div className="notice"><BookOpen size={19}/><div><b>依分類探索作品 · v0.5.7</b><p>可選多個條件組合查詢。例如「日文 + 漫畫」，或「作者 + 語言」。分類條件透過既有的官方搜尋 API 查詢，並非離線建立的完整標籤目錄。</p></div></div>
       <div className="categoryPresets">
         <strong>快速分類</strong>
         <div className="categoryPresetButtons">{categoryPresets.map(x => {
@@ -219,6 +241,20 @@ export default function NhCatalog(props: Props) {
         {categoryFilters.map((filter, i) => <button type="button" key={`${filter.kind}:${filter.value}:${i}`} onClick={() => toggleCategory(filter.kind, filter.value)} title="移除此條件">{categoryKinds.find(k => k.kind === filter.kind)?.label}：{filter.value} ×</button>)}
         <button type="button" onClick={() => { setCategoryFilters([]); setPage(1); }}>清除全部</button>
       </div>}
+      <div className="taxonomyDirectory">
+        <div className="taxonomyHeader"><div><strong>完整分類索引</strong><p>從來源 API 分頁取得分類名稱，點選後直接加入條件。每次只載入一頁，避免密集請求。</p></div><button type="button" className="secondaryButton" disabled={directoryLoading} onClick={() => setDirectoryRefresh(n => n + 1)}><RefreshCw size={15}/> 重新載入</button></div>
+        <div className="taxonomyKinds" role="tablist" aria-label="分類類別">
+          {categoryKinds.map(c => <button type="button" key={c.kind} role="tab" aria-selected={directoryKind === c.kind} className={directoryKind === c.kind ? 'on' : ''} onClick={() => { setDirectoryKind(c.kind); setDirectoryPage(1); setDirectoryFilter(''); }}>{c.label}</button>)}
+        </div>
+        <input className="taxonomyFilter" value={directoryFilter} onChange={e=>setDirectoryFilter(e.target.value)} placeholder="篩選目前載入的分類名稱" aria-label="篩選目前頁面分類"/>
+        {directoryLoading && <p className="catalogStatus"><LoaderCircle className="spin" size={17}/> 正在載入分類…</p>}
+        {directoryError && <div className="error">分類目錄暫時無法取得：{directoryError}</div>}
+        {!directoryLoading && !directoryError && <div className="taxonomyTags">
+          {visibleDirectoryTags.map((tag,i) => <button type="button" key={`${tag.id ?? i}-${tag.name}`} onClick={() => toggleCategory(directoryKind, tag.name)} className={categoryFilters.some(f => f.kind === directoryKind && f.value.toLowerCase() === tag.name.toLowerCase()) ? 'on' : ''} title="加入或移除此分類條件">{tag.name}{tag.count !== null && <small>{tag.count.toLocaleString()}</small>}</button>)}
+          {!visibleDirectoryTags.length && <p className="detailNote">目前頁面沒有符合的分類；可清除篩選或翻頁。</p>}
+        </div>}
+        <div className="taxonomyPager"><button type="button" disabled={directoryPage===1 || directoryLoading} onClick={()=>setDirectoryPage(n=>n-1)}>上一頁</button><span>第 {directoryPage} 頁{directoryData?.totalPages ? ` / ${directoryData.totalPages} 頁` : ''}</span><button type="button" disabled={directoryLoading || !directoryData?.hasNext} onClick={()=>setDirectoryPage(n=>n+1)}>下一頁</button></div>
+      </div>
       <div className="catalogSort"><label>分類排序 <select value={sort} onChange={e => { setSort(e.target.value as Sort); setPage(1); }}>{sorting.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label></div>
       {!categoryHasQuery && <div className="categoryEmpty">請先選擇上面的分類，或輸入作者、社團、角色、原作與標籤。</div>}
     </div>}
