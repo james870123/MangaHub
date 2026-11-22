@@ -535,6 +535,35 @@ async fn browse_nh_catalog(mode: String, query: String, sort: String, page: u32)
     parse_nh_catalog(&body, page)
 }
 
+
+// Public, read-only user-facing API endpoints. Never authenticate or bypass rate limits.
+#[command]
+async fn random_nh_gallery() -> Result<u64, String> {
+    let client = nh_api_client()?;
+    let body = nh_get_json(&client, Url::parse("https://nhentai.net/api/v2/galleries/random").unwrap()).await?;
+    let id = body.as_u64()
+        .or_else(|| body.get("id").and_then(Value::as_u64))
+        .or_else(|| body.get("gallery_id").and_then(Value::as_u64))
+        .or_else(|| body.pointer("/data/id").and_then(Value::as_u64))
+        .or_else(|| body.pointer("/gallery/id").and_then(Value::as_u64))
+        .or_else(|| body.get("id").and_then(Value::as_str).and_then(|v| v.parse::<u64>().ok()));
+    id.filter(|&v| v > 0).ok_or("隨機作品 API 未回傳可辨識的作品 ID".into())
+}
+
+#[command]
+async fn related_nh_galleries(id: u64) -> Result<NhCatalogPage, String> {
+    if id == 0 { return Err("作品 ID 無效".into()); }
+    let client = nh_api_client()?;
+    let url = Url::parse(&format!("https://nhentai.net/api/v2/galleries/{id}/related"))
+        .map_err(|e| e.to_string())?;
+    let response = nh_get_json(&client, url).await?;
+    // Supported list shapes are checked strictly; a changed API shows an error, not invented cards.
+    if let Some(a) = response.get("related").and_then(Value::as_array) {
+        return parse_nh_catalog(&Value::Array(a.clone()), 1);
+    }
+    parse_nh_catalog(&response, 1)
+}
+
 #[cfg(test)]
 mod nh_catalog_tests {
     use super::*;
@@ -560,11 +589,157 @@ mod nh_catalog_tests {
     }
 }
 
+
+
+// v0.5.5 account API. Secrets are NEVER returned to the WebView or stored in
+// browser localStorage. Windows Credential Manager is the storage backend.
+// Only the exact official HTTPS API host can receive an Authorization header.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NhAccountStatus {
+    connected: bool,
+    display_name: String,
+    credential_kind: String,
+}
+
+#[cfg(target_os = "windows")]
+fn account_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new("MangaHub-nhentai-v055", "nhentai-account")
+        .map_err(|_| "無法使用 Windows Credential Manager".to_string())
+}
+#[cfg(target_os = "windows")]
+fn save_account_secret(value: &str) -> Result<(), String> {
+    account_entry()?.set_password(value).map_err(|_| "無法安全儲存登入憑證".to_string())
+}
+#[cfg(target_os = "windows")]
+fn load_account_secret() -> Result<String, String> {
+    account_entry()?.get_password().map_err(|_| "尚未連接帳號或無法讀取安全憑證".to_string())
+}
+#[cfg(target_os = "windows")]
+fn clear_account_secret() -> Result<(), String> {
+    account_entry()?.delete_credential().map_err(|_| "無法移除已儲存的憑證".to_string())
+}
+#[cfg(not(target_os = "windows"))]
+fn save_account_secret(_value: &str) -> Result<(), String> { Err("目前僅在 Windows 支援安全憑證儲存".into()) }
+#[cfg(not(target_os = "windows"))]
+fn load_account_secret() -> Result<String, String> { Err("目前僅在 Windows 支援安全憑證儲存".into()) }
+#[cfg(not(target_os = "windows"))]
+fn clear_account_secret() -> Result<(), String> { Err("目前僅在 Windows 支援安全憑證儲存".into()) }
+
+fn validated_auth_header(kind: &str, secret: &str) -> Result<String, String> {
+    if kind != "Key" && kind != "User" { return Err("僅支援官方 Key 或 User Token".into()); }
+    let token = secret.trim();
+    if token.len() < 8 || token.len() > 4096 || !token.is_ascii() || token.chars().any(|c| c.is_ascii_whitespace() || c.is_ascii_control()) {
+        return Err("憑證格式錯誤".into());
+    }
+    Ok(format!("{kind} {token}"))
+}
+fn account_authorization() -> Result<String, String> {
+    let stored = load_account_secret()?;
+    let (kind, token) = stored.split_once(':').ok_or("安全憑證資料格式不正確")?;
+    validated_auth_header(kind, token)
+}
+fn account_kind() -> String {
+    load_account_secret().ok().and_then(|s| s.split_once(':').map(|x| x.0.to_owned())).unwrap_or_default()
+}
+async fn nh_account_request(method: reqwest::Method, path: &str, query: &[(&str,String)], auth: &str) -> Result<Value, String> {
+    if !path.starts_with("/api/v2/") || path.contains("..") || path.contains('?') || path.contains('#') { return Err("API 路徑不合法".into()); }
+    let mut url = Url::parse(&format!("https://nhentai.net{path}")).map_err(|_| "API 網址錯誤")?;
+    for (k,v) in query { url.query_pairs_mut().append_pair(k, v); }
+    let client = nh_api_client()?;
+    let is_mutation = method != reqwest::Method::GET;
+    let resp = client.request(method,url)
+        .header(reqwest::header::AUTHORIZATION, auth)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send().await.map_err(|_| "帳號 API 連線失敗，請檢查網路".to_string())?;
+    let status=resp.status();
+    if !status.is_success() {
+        return Err(match status.as_u16() {
+            401 => "HTTP 401：登入憑證無效或過期".into(),
+            403 => "HTTP 403：來源拒絕操作或目前憑證權限不足".into(),
+            429 => "HTTP 429：來源限流，請稍後再手動重試".into(),
+            n => format!("帳號 API HTTP {n}，請求未完成"),
+        });
+    }
+    if resp.content_length().unwrap_or(0) > 3_000_000 { return Err("API 回應太大".into()); }
+    let bytes = resp.bytes().await.map_err(|_| "讀取 API 回應失敗")?;
+    if bytes.len()>3_000_000 { return Err("API 回應太大".into()); }
+    if bytes.is_empty() { return Ok(serde_json::json!({"success":true})); }
+    match serde_json::from_slice(&bytes) {
+        Ok(value) => Ok(value),
+        Err(_) if is_mutation => Ok(serde_json::json!({"success":true})),
+        Err(_) => Err("API 未回傳預期的 JSON".into()),
+    }
+}
+fn user_label(v: &Value) -> String {
+    ["username","display_name","name","slug"].iter().find_map(|key| v.get(*key).and_then(Value::as_str))
+        .or_else(|| v.get("user").and_then(|u| u.get("username")).and_then(Value::as_str))
+        .unwrap_or("已驗證帳號").chars().take(80).collect()
+}
+#[command]
+async fn nh_connect(kind: String, secret: String) -> Result<NhAccountStatus, String> {
+    let auth = validated_auth_header(&kind, &secret)?;
+    // Verify BEFORE storing the secret; never log or return it.
+    let profile = nh_account_request(reqwest::Method::GET,"/api/v2/user",&[],&auth).await?;
+    let display_name = user_label(&profile);
+    save_account_secret(&format!("{}:{}",kind,secret.trim()))?;
+    Ok(NhAccountStatus {connected:true,display_name,credential_kind:kind})
+}
+#[command]
+async fn nh_session() -> Result<NhAccountStatus, String> {
+    let auth = match account_authorization() {
+        Ok(s) => s,
+        Err(_) => return Ok(NhAccountStatus{connected:false,display_name:String::new(),credential_kind:String::new()}),
+    };
+    let profile = nh_account_request(reqwest::Method::GET,"/api/v2/user",&[],&auth).await?;
+    Ok(NhAccountStatus{connected:true,display_name:user_label(&profile),credential_kind:account_kind()})
+}
+#[command]
+fn nh_disconnect() -> Result<(), String> { clear_account_secret() }
+#[command]
+async fn nh_account_favorites(page:u32) -> Result<NhCatalogPage,String> {
+    if page<1 || page>1000 {return Err("頁碼必須介於 1～1000".into());}
+    let value=nh_account_request(reqwest::Method::GET,"/api/v2/favorites",&[("page",page.to_string())],&account_authorization()?).await?;
+    parse_nh_catalog(&value,page)
+}
+#[command]
+async fn nh_account_blacklist(page:u32) -> Result<Value,String> {
+    if page<1 || page>100 {return Err("黑名單頁碼不合法".into());}
+    nh_account_request(reqwest::Method::GET,"/api/v2/blacklist",&[("page",page.to_string())],&account_authorization()?).await
+}
+#[command]
+async fn nh_account_random_favorite() -> Result<u64,String> {
+    let value=nh_account_request(reqwest::Method::GET,"/api/v2/favorites/random",&[],&account_authorization()?).await?;
+    value.as_u64().or_else(||value.get("id").or_else(||value.get("gallery_id"))
+        .or_else(||value.get("gallery").and_then(|v|v.get("id"))).and_then(Value::as_u64))
+        .ok_or("隨機收藏未回傳可辨識的 Gallery ID".into())
+}
+#[command]
+async fn nh_toggle_remote_favorite(gallery_id:u64, add:bool) -> Result<bool,String> {
+    if gallery_id==0 { return Err("作品 ID 不合法".into()); }
+    // API Key may be scoped to reads; write operations require a User Token.
+    if account_kind()!="User" {return Err("修改官方收藏需要 User Token；API Key 模式僅同步讀取".into());}
+    let method = if add {reqwest::Method::POST} else {reqwest::Method::DELETE};
+    let _ = nh_account_request(method,&format!("/api/v2/galleries/{gallery_id}/favorite"),&[],&account_authorization()?).await?;
+    Ok(add)
+}
+#[command]
+async fn nh_gallery_comments(gallery_id:u64, page:u32) -> Result<Value,String> {
+    if gallery_id==0 || page==0 || page>100 {return Err("作品 ID／頁碼不合法".into());}
+    // Comments can be read anonymously. A separate authenticated browser is
+    // used for posting because the official API requires CAPTCHA/PoW.
+    {
+        let mut url=Url::parse(&format!("https://nhentai.net/api/v2/galleries/{gallery_id}/comments")).map_err(|_| "URL 錯誤")?;
+        url.query_pairs_mut().append_pair("page", &page.to_string());
+        nh_get_json(&nh_api_client()?, url).await
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![inspect_comicbox_chapter, probe_comicbox_image, probe_comicbox_pair, fetch_nh_gallery, browse_nh_catalog])
+        .invoke_handler(tauri::generate_handler![inspect_comicbox_chapter, probe_comicbox_image, probe_comicbox_pair, fetch_nh_gallery, browse_nh_catalog, random_nh_gallery, related_nh_galleries, nh_connect, nh_disconnect, nh_session, nh_account_favorites, nh_account_blacklist, nh_account_random_favorite, nh_toggle_remote_favorite, nh_gallery_comments])
         .run(tauri::generate_context!())
         .expect("error while running MangaHub");
 }

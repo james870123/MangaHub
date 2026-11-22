@@ -1,13 +1,14 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import { BookOpen, Bookmark, ExternalLink, RefreshCw, ChevronLeft, ChevronRight, CircleHelp, Globe2, Image, Library, Link, LoaderCircle, Plus, Search, Trash2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { BookOpen, Bookmark, ExternalLink, RefreshCw, ChevronLeft, ChevronRight, CircleHelp, Globe2, Image, Library, Link, LoaderCircle, Plus, Search, Trash2, PanelLeftClose, PanelLeftOpen, UserRound } from 'lucide-react';
 import './style.css';
 import Reader from './Reader';
 import SourceDiagnostics from './SourceDiagnostics';
 import NhentaiSource from './NhentaiSource';
 import NhCatalog, { type CatalogItem, type GalleryDetail, type ReadingRecord } from './NhCatalog';
+import NhAccount, {type AccountItem} from './NhAccount';
 import SourceCapabilities from './SourceCapabilityPanel';
 import { sourceForUrl } from './sourceCapabilities';
 
@@ -22,13 +23,13 @@ function useSaved<T>(key: string, initial: T): [T, React.Dispatch<React.SetState
 }
 const example = 'https://www.comicbox.xyz/free-chapter/42682?t=20260415';
 function App() {
-  const [tab, setTab] = useState<'source' | 'library' | 'reader' | 'chapter' | 'diagnostics' | 'capabilities' | 'nhentai' | 'catalog'>('catalog');
+  const [tab, setTab] = useState<'source' | 'library' | 'reader' | 'chapter' | 'diagnostics' | 'capabilities' | 'nhentai' | 'catalog' | 'account'>('catalog');
   const [url, setUrl] = useState(example);
   const [sidebarCollapsed, setSidebarCollapsed] = useSaved('mh-ui-sidebar-collapsed', false);
-  const readerOrigin = useRef<'catalog' | 'nhentai' | 'capabilities' | null>(null);
+  const readerOrigin = useRef<'catalog' | 'nhentai' | 'capabilities' | 'account' | null>(null);
   const catalogScroll = useRef(0);
   const originScroll = useRef(0);
-  const [readerReturn, setReaderReturn] = useState<'catalog' | 'nhentai' | 'capabilities' | null>(null);
+  const [readerReturn, setReaderReturn] = useState<'catalog' | 'nhentai' | 'capabilities' | 'account' | null>(null);
   function openTab(next: typeof tab) {
     if (next === 'catalog' && tab !== 'reader') window.scrollTo(0, catalogScroll.current);
     setTab(next);
@@ -61,15 +62,22 @@ function App() {
   const [showCovers, setShowCovers] = useSaved('mh-v05-show-covers', false);
   const [nhFavorites, setNhFavorites] = useSaved<CatalogItem[]>('mh-v05-nh-favorites', []);
   const [nhHistory, setNhHistory] = useSaved<ReadingRecord[]>('mh-v05-nh-history', []);
+  const [blockedTags, setBlockedTags] = useState<string[]>(()=>{
+    try {const value=JSON.parse(localStorage.getItem('mh-v055-local-blacklist')||'[]') as unknown;
+      return Array.isArray(value)?value.filter((x):x is string=>typeof x==='string'):[];
+    } catch{return [] as string[];}
+  });
+  const applyBlockedTags = useCallback((names:string[])=>setBlockedTags(names),[]);
+  const [accountGalleryId,setAccountGalleryId]=useState<number|null>(null);
   const [currentGallery, setCurrentGallery] = useState<GalleryDetail | null>(null);
   const toggleNhFavorite = (item: CatalogItem) => setNhFavorites(prev => prev.some(x => x.id === item.id) ? prev.filter(x => x.id !== item.id) : [item, ...prev].slice(0, 500));
-  function readNhGallery(gallery: GalleryDetail) {
+  function readNhGallery(gallery: GalleryDetail, origin: 'catalog'|'account' = 'catalog') {
     setNhHistory(prev => {
       const existing = prev.find(r => r.id === gallery.id);
       const record: ReadingRecord = { id: gallery.id, title: gallery.title, coverUrl: gallery.coverUrl ?? existing?.coverUrl ?? null, page: existing?.page ?? 1, total: gallery.pageUrls.length, updatedAt: Date.now() };
       return [record, ...prev.filter(r => r.id !== gallery.id)].slice(0, 200);
     });
-    readDirectImages(gallery.pageUrls, 'catalog');
+    readDirectImages(gallery.pageUrls, origin);
     setCurrentGallery(gallery);
   }
   function repairHistoryCover(id: number, coverUrl: string) {
@@ -78,11 +86,32 @@ function App() {
     setNhFavorites(prev => prev.map(item => item.id === id && item.coverUrl !== coverUrl
       ? { ...item, coverUrl } : item));
   }
+  function syncOfficialFavorites(items: AccountItem[]) {
+    setNhFavorites(prev => {
+      const merged = new Map<number,CatalogItem>();
+      for(const item of prev) merged.set(item.id,item);
+      for(const item of items) merged.set(item.id, {id:item.id,title:item.title,coverUrl:item.coverUrl,pageCount:item.pageCount,tags:item.tags});
+      return [...merged.values()].slice(0,2000);
+    });
+  }
+  function handleRemoteFavorite(id:number,add:boolean) {
+    if(!add)setNhFavorites(prev=>prev.filter(x=>x.id!==id));
+    else void invoke<GalleryDetail>('fetch_nh_gallery',{input:String(id)}).then(g=>{
+      setNhFavorites(prev=>prev.some(x=>x.id===id)?prev:[{id,title:g.title,coverUrl:g.coverUrl??null,pageCount:g.pageUrls.length,tags:g.tags??[]},...prev]);
+    }).catch(()=>{});
+  }
+  async function openAccountGallery(id:number) {
+    try {
+      const gallery=await invoke<GalleryDetail>('fetch_nh_gallery',{input:String(id)});
+      readNhGallery(gallery,'account');
+    } catch(e) {window.alert('無法開啟作品：'+String(e));}
+  }
+  function openAccountComments(id:number) {setAccountGalleryId(id);setTab('account');window.scrollTo(0,0);}
   function recordNhProgress(page: number) {
     if (!currentGallery) return;
     setNhHistory(prev => prev.map(r => r.id === currentGallery.id && r.page !== page ? { ...r, page, updatedAt: Date.now() } : r));
   }
-  function readDirectImages(urls: string[], origin: 'catalog' | 'nhentai' | 'capabilities' | null = null) {
+  function readDirectImages(urls: string[], origin: 'catalog' | 'nhentai' | 'capabilities' | 'account' | null = null) {
     originScroll.current = window.scrollY;
     if (origin === 'catalog') catalogScroll.current = window.scrollY;
     readerOrigin.current = origin;
@@ -152,13 +181,14 @@ function App() {
       <button title="我的書架" aria-label="我的書架" className={tab === 'library' ? 'nav active' : 'nav'} onClick={() => openTab('library')}><Library size={19}/><span className="navText">我的書架</span> <span className="count">{books.length}</span></button>
       <button title="圖片閱讀器" aria-label="圖片閱讀器" className={tab === 'reader' ? 'nav active' : 'nav'} onClick={() => { setCurrentGallery(null); setReaderReturn(null); readerOrigin.current = null; setReaderUrls(undefined); openTab('reader'); }}><Image size={19}/><span className="navText">圖片閱讀器</span></button>
       <button title="漫畫探索" aria-label="漫畫探索" className={tab === 'catalog' ? 'nav active' : 'nav'} onClick={() => openTab('catalog')}><Search size={19}/><span className="navText">漫畫探索</span></button>
+      <button title="nHentai 帳號" aria-label="nHentai 帳號" className={tab === 'account' ? 'nav active' : 'nav'} onClick={() => openTab('account')}><UserRound size={19}/><span className="navText">帳號與同步</span></button>
       <button title="nHentai Gallery" aria-label="nHentai Gallery" className={tab === 'nhentai' ? 'nav active' : 'nav'} onClick={() => openTab('nhentai')}><BookOpen size={19}/><span className="navText">nHentai Gallery</span></button>
       <button title="來源相容性" aria-label="來源相容性" className={tab === 'capabilities' ? 'nav active' : 'nav'} onClick={() => openTab('capabilities')}><Image size={19}/><span className="navText">來源相容性</span></button>
       <button title="來源診斷" aria-label="來源診斷" className={tab === 'diagnostics' ? 'nav active' : 'nav'} onClick={() => openTab('diagnostics')}><Globe2 size={19}/><span className="navText">來源診斷</span></button>
-      <div className="asideFoot"><CircleHelp size={16}/><span className="footText">v0.5.3 · Local-first<br/>無原站廣告、無追蹤 SDK</span></div>
+      <div className="asideFoot"><CircleHelp size={16}/><span className="footText">v0.5.5 · Local-first<br/>無原站廣告、無追蹤 SDK</span></div>
     </aside>
     <main className="main">
-      <header><span className="eyebrow"><Globe2 size={15}/> MangaHub / {tab === 'source' ? 'Source Inspector' : tab === 'library' ? 'My Library' : tab === 'chapter' ? 'Chapter' : tab === 'diagnostics' ? 'Diagnostics' : tab === 'capabilities' ? 'Source Capabilities' : tab === 'catalog' ? 'Discover' : tab === 'nhentai' ? 'Gallery' : 'Reader'}</span><span className="status">● Local-first</span></header>
+      <header><span className="eyebrow"><Globe2 size={15}/> MangaHub / {tab === 'source' ? 'Source Inspector' : tab === 'library' ? 'My Library' : tab === 'chapter' ? 'Chapter' : tab === 'diagnostics' ? 'Diagnostics' : tab === 'capabilities' ? 'Source Capabilities' : tab === 'catalog' ? 'Discover' : tab === 'account' ? 'Account' : tab === 'nhentai' ? 'Gallery' : 'Reader'}</span><span className="status">● Local-first</span></header>
       {tab === 'source' && <section className="content">
         <div className="pill">SOURCE ADAPTER · COMICBOX</div>
         <h1>探索漫畫，<br/><span>專注於閱讀。</span></h1>
@@ -192,9 +222,10 @@ function App() {
       {tab === 'library' && <section className="content"><div className="pill">PERSONAL COLLECTION</div><h1>我的<span>書架</span></h1><p className="lead">收藏資料只儲存在這台裝置，不會上傳到伺服器。</p>{books.length === 0 ? <div className="empty"><Library size={36}/><h2>書架還是空的</h2><p>先到來源解析頁面，解析章節後即可收藏。</p><button onClick={() => setTab('source')} className="primary">前往來源解析</button></div> : <div className="bookGrid">{books.map(book => <div className="book" key={book.chapterId}><div className="bookCover"><BookOpen size={36}/></div><div className="bookInfo"><b>{book.title}</b><small>{book.pages} 個頁面節點</small><div className="bookActions"><button onClick={() => void openChapter({ id: book.chapterId, title: book.title, url: book.url })}>開啟章節</button><button aria-label="移除收藏" onClick={() => setBooks(p => p.filter(x => x.chapterId !== book.chapterId))}><Trash2 size={16}/></button></div></div></div>)}</div>}</section>}
       <div className={tab === 'capabilities' ? 'sourceView' : 'sourceView is-hidden'}><SourceCapabilities onRead={urls => readDirectImages(urls, 'capabilities')}/></div>
       <div className={tab === 'nhentai' ? 'sourceView' : 'sourceView is-hidden'}><NhentaiSource onRead={urls => readDirectImages(urls, 'nhentai')}/></div>
-      <div className={tab === 'catalog' ? 'catalogView' : 'catalogView is-hidden'}><NhCatalog adultConfirmed={adultConfirmed} showCovers={showCovers} onAdultChange={setAdultConfirmed} onCoversChange={setShowCovers} favorites={nhFavorites} onToggleFavorite={toggleNhFavorite} history={nhHistory} onClearHistory={() => setNhHistory([])} onReadGallery={readNhGallery} onRepairHistoryCover={repairHistoryCover}/></div>
+      <div className={tab === 'catalog' ? 'catalogView' : 'catalogView is-hidden'}><NhCatalog adultConfirmed={adultConfirmed} showCovers={showCovers} onAdultChange={setAdultConfirmed} onCoversChange={setShowCovers} favorites={nhFavorites} onToggleFavorite={toggleNhFavorite} history={nhHistory} onClearHistory={() => setNhHistory([])} onReadGallery={readNhGallery} onRepairHistoryCover={repairHistoryCover} blockedTags={blockedTags} onOpenComments={openAccountComments}/></div>
+      {tab === 'account' && <NhAccount onSyncFavorites={syncOfficialFavorites} onRemoteFavorite={handleRemoteFavorite} onOpenGallery={id=>void openAccountGallery(id)} onBlacklistUpdated={applyBlockedTags} selectedGalleryId={accountGalleryId}/>}
       {tab === 'diagnostics' && <SourceDiagnostics/>}
-      {tab === 'reader' && <Reader key={readerSession} initialUrls={readerUrls} onProgress={currentGallery ? recordNhProgress : undefined} galleryTitle={currentGallery?.title} onBack={readerReturn ? returnFromReader : undefined} backLabel={readerReturn === 'catalog' ? '返回漫畫列表' : readerReturn === 'nhentai' ? '返回 Gallery' : '返回來源頁'}/>} 
+      {tab === 'reader' && <Reader key={readerSession} initialUrls={readerUrls} onProgress={currentGallery ? recordNhProgress : undefined} galleryTitle={currentGallery?.title} onBack={readerReturn ? returnFromReader : undefined} backLabel={readerReturn === 'catalog' ? '返回漫畫列表' : readerReturn === 'nhentai' ? '返回 Gallery' : readerReturn === 'account' ? '返回帳號頁' : '返回來源頁'}/>} 
     </main>
   </div>;
 }

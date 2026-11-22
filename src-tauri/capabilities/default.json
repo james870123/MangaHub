@@ -11,6 +11,9 @@
       "allow": [
         {
           "url": "https://www.comicbox.xyz/*"
+        },
+        {
+          "url": "https://nhentai.net/*"
         }
       ]
     }
