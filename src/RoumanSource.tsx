@@ -20,7 +20,6 @@ function saved<T>(key: string, fallback: T): T {
   catch { return fallback; }
 }
 function chapterUrl(id: string, index: number) { return `https://rouman5.com/books/${id}/${index}`; }
-const sections = ['正熱門', '今日最佳', '最近更新', '本週熱門', '已完結'];
 
 export default function RoumanSource({ onRead, active }: Props) {
   const [mode, setMode] = useState<Mode>('home');
