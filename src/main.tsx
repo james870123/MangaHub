@@ -35,11 +35,15 @@ function App() {
   function readNhGallery(gallery: GalleryDetail) {
     setNhHistory(prev => {
       const existing = prev.find(r => r.id === gallery.id);
-      const record: ReadingRecord = { id: gallery.id, title: gallery.title, coverUrl: gallery.coverUrl ?? null, page: existing?.page ?? 1, total: gallery.pageUrls.length, updatedAt: Date.now() };
+      const record: ReadingRecord = { id: gallery.id, title: gallery.title, coverUrl: gallery.coverUrl ?? existing?.coverUrl ?? null, page: existing?.page ?? 1, total: gallery.pageUrls.length, updatedAt: Date.now() };
       return [record, ...prev.filter(r => r.id !== gallery.id)].slice(0, 200);
     });
     readDirectImages(gallery.pageUrls);
     setCurrentGallery(gallery);
+  }
+  function repairHistoryCover(id: number, coverUrl: string) {
+    setNhHistory(prev => prev.map(record => record.id === id && record.coverUrl !== coverUrl
+      ? { ...record, coverUrl } : record));
   }
   function recordNhProgress(page: number) {
     if (!currentGallery) return;
@@ -144,7 +148,7 @@ function App() {
       {tab === 'library' && <section className="content"><div className="pill">PERSONAL COLLECTION</div><h1>我的<span>書架</span></h1><p className="lead">收藏資料只儲存在這台裝置，不會上傳到伺服器。</p>{books.length === 0 ? <div className="empty"><Library size={36}/><h2>書架還是空的</h2><p>先到來源解析頁面，解析章節後即可收藏。</p><button onClick={() => setTab('source')} className="primary">前往來源解析</button></div> : <div className="bookGrid">{books.map(book => <div className="book" key={book.chapterId}><div className="bookCover"><BookOpen size={36}/></div><div className="bookInfo"><b>{book.title}</b><small>{book.pages} 個頁面節點</small><div className="bookActions"><button onClick={() => void openChapter({ id: book.chapterId, title: book.title, url: book.url })}>開啟章節</button><button aria-label="移除收藏" onClick={() => setBooks(p => p.filter(x => x.chapterId !== book.chapterId))}><Trash2 size={16}/></button></div></div></div>)}</div>}</section>}
       {tab === 'capabilities' && <SourceCapabilities onRead={readDirectImages}/>}
       {tab === 'nhentai' && <NhentaiSource onRead={readDirectImages}/>}
-      {tab === 'catalog' && <NhCatalog adultConfirmed={adultConfirmed} showCovers={showCovers} onAdultChange={setAdultConfirmed} onCoversChange={setShowCovers} favorites={nhFavorites} onToggleFavorite={toggleNhFavorite} history={nhHistory} onClearHistory={() => setNhHistory([])} onReadGallery={readNhGallery}/>}
+      {tab === 'catalog' && <NhCatalog adultConfirmed={adultConfirmed} showCovers={showCovers} onAdultChange={setAdultConfirmed} onCoversChange={setShowCovers} favorites={nhFavorites} onToggleFavorite={toggleNhFavorite} history={nhHistory} onClearHistory={() => setNhHistory([])} onReadGallery={readNhGallery} onRepairHistoryCover={repairHistoryCover}/>}
       {tab === 'diagnostics' && <SourceDiagnostics/>}
       {tab === 'reader' && <Reader key={readerSession} initialUrls={readerUrls} onProgress={currentGallery ? recordNhProgress : undefined}/>} 
     </main>

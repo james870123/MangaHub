@@ -18,6 +18,7 @@ type Props = {
   history: ReadingRecord[];
   onClearHistory: () => void;
   onReadGallery: (gallery: GalleryDetail) => void;
+  onRepairHistoryCover: (id: number, coverUrl: string) => void;
 };
 const sorting: { value: Sort; label: string }[] = [
   { value: 'date', label: '最新' },
@@ -29,7 +30,7 @@ const sorting: { value: Sort; label: string }[] = [
 const infoForRecord = (r: ReadingRecord): CatalogItem => ({ id: r.id, title: r.title, coverUrl: r.coverUrl, pageCount: r.total, tags: [] });
 
 export default function NhCatalog(props: Props) {
-  const { adultConfirmed, showCovers, onAdultChange, onCoversChange, favorites, onToggleFavorite, history, onClearHistory, onReadGallery } = props;
+  const { adultConfirmed, showCovers, onAdultChange, onCoversChange, favorites, onToggleFavorite, history, onClearHistory, onReadGallery, onRepairHistoryCover } = props;
   const [mode, setMode] = useState<Mode>('latest');
   const [searchText, setSearchText] = useState('');
   const [submitted, setSubmitted] = useState('');
@@ -63,9 +64,10 @@ export default function NhCatalog(props: Props) {
     try {
       const data = await invoke<GalleryDetail>('fetch_nh_gallery', { input: String(item.id) });
       setDetail(data);
+      if (data.coverUrl) onRepairHistoryCover(data.id, data.coverUrl);
     } catch (err) { setDetailError(String(err)); }
     finally { setDetailLoading(false); }
-  }, []);
+  }, [onRepairHistoryCover]);
   const visibleItems = mode === 'favorites' ? favorites : mode === 'history' ? history.map(infoForRecord) : (result?.items ?? []);
   const selected = selection ? favorites.some(f => f.id === selection.id) : false;
 
@@ -101,7 +103,7 @@ export default function NhCatalog(props: Props) {
     <div className="catalogGrid">{visibleItems.map(item => <article key={item.id} className="catalogCard">
       <button className="catalogCardMain" onClick={() => void openDetail(item)} aria-label={`查看 ${item.title}`}>
         <div className="catalogCover"><BookOpen size={32}/>{showCovers && item.coverUrl && <img src={item.coverUrl} alt="作品封面" loading="lazy" referrerPolicy="no-referrer" onError={e => { e.currentTarget.style.display = 'none'; }}/>}</div>
-        <div className="catalogCardText"><strong>{item.title}</strong><small>#{item.id} · {item.pageCount || '—'} 頁</small>{mode === 'history' && <small><Clock3 size={12}/> 上次第 {history.find(r => r.id === item.id)?.page ?? 1} 頁</small>}</div>
+        <div className="catalogCardText"><strong>{item.title}</strong><small>#{item.id} · {item.pageCount || '—'} 頁</small>{mode === 'history' && <small><Clock3 size={12}/> 上次第 {history.find(r => r.id === item.id)?.page ?? 1} 頁</small>}{mode === 'history' && !item.coverUrl && <small>封面未儲存，點此更新資料</small>}</div>
       </button>
       <button className="catalogHeart" aria-label={favorites.some(f => f.id === item.id) ? '取消收藏' : '收藏'} onClick={() => onToggleFavorite(item)}><Heart size={18} fill={favorites.some(f => f.id === item.id) ? 'currentColor' : 'none'}/></button>
     </article>)}</div>

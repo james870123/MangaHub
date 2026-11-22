@@ -440,8 +440,10 @@ fn nh_cover(data: &Value) -> Option<String> {
     // detail responses can instead use nested cover/thumbnail objects.
     let paths = [
         data.pointer("/thumbnail/path"),
+        data.pointer("/thumbnail/s"),
         data.get("thumbnail"),
         data.pointer("/cover/path"),
+        data.pointer("/cover/s"),
         data.pointer("/images/cover/path"),
         data.get("cover_path"),
         data.get("cover_url"),
@@ -467,11 +469,11 @@ fn parse_nh_list_item(v: &Value) -> Option<NhListItem> {
 }
 fn parse_nh_catalog(v: &Value, page: u32) -> Result<NhCatalogPage, String> {
     let arr = if let Some(arr) = v.as_array() { Some(arr) } else {
-        v.get("items").or_else(|| v.get("results")).or_else(|| v.get("galleries"))
+        v.get("result").or_else(|| v.get("items")).or_else(|| v.get("results")).or_else(|| v.get("galleries"))
             .or_else(|| v.get("data")).and_then(Value::as_array)
     }.ok_or("API 清單結構未辨識，請保留錯誤資訊供相容性修正")?;
     let items = arr.iter().take(100).filter_map(parse_nh_list_item).collect::<Vec<_>>();
-    let total_pages = v.get("total_pages").or_else(|| v.get("totalPages"))
+    let total_pages = v.get("total_pages").or_else(|| v.get("totalPages")).or_else(|| v.get("num_pages"))
         .and_then(Value::as_u64).map(|x| x.min(100000) as u32)
         .or_else(|| {
             let total = v.get("total").and_then(Value::as_u64)?;
@@ -544,6 +546,11 @@ mod nh_catalog_tests {
         assert_eq!(result.items[0].cover_url.as_deref(), Some("https://t.nhentai.net/galleries/123/cover.jpg"));
         assert!(result.has_next);
         assert!(nh_safe_cover("https://evil.test/cover.jpg").is_none());
+        let result_list = serde_json::json!({"result":[{"id":321,"english_title":"V2 latest", "thumbnail":{"s":"https://t.nhentai.net/galleries/322/thumb.jpg"},"num_pages":5}],"num_pages":4,"page":1});
+        let v2 = parse_nh_catalog(&result_list, 1).unwrap();
+        assert_eq!(v2.items.len(), 1);
+        assert_eq!(v2.items[0].title, "V2 latest");
+        assert_eq!(v2.items[0].cover_url.as_deref(), Some("https://t.nhentai.net/galleries/322/thumb.jpg"));
         let compact = serde_json::json!({"id": 456, "english_title": "Compact list title", "thumbnail": "galleries/345/thumb.webp", "num_pages": 8});
         let compact_item = parse_nh_list_item(&compact).unwrap();
         assert_eq!(compact_item.title, "Compact list title");
