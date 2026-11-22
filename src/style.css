@@ -199,3 +199,10 @@ button:disabled{opacity:.45;cursor:not-allowed}
     flex-wrap: wrap;
   }
 }
+
+/* v0.5.8 Rouman5 chapter reader */
+.roumanPage{width:100%;max-width:none;margin:0;padding:clamp(24px,4vw,60px)}
+.roumanPage .urlbox{max-width:none}
+.roumanRecent{margin-top:36px}.roumanRecent h3{font-size:16px}
+.roumanPage .detailNote{align-self:center}
+@media(max-width:750px){.roumanPage{padding:24px 5%}.roumanPage .urlbox button{min-width:100%}}

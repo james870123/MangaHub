@@ -791,10 +791,158 @@ async fn nh_gallery_comments(gallery_id:u64, page:u32) -> Result<Value,String> {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+
+
+// Rouman5 chapter inspection. Reads only published chapter HTML and returns
+// source-provided JPEG URLs. No hidden API calls, cookies, or challenge bypass.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RoumanChapter {
+    book_id: String,
+    book_title: String,
+    chapter_id: String,
+    chapter_title: String,
+    chapter_index: u32,
+    chapter_count: u32,
+    page_urls: Vec<String>,
+    url: String,
+}
+
+fn validate_rouman_chapter_url(input: &str) -> Result<Url, String> {
+    let url = Url::parse(input).map_err(|_| "網址格式錯誤".to_owned())?;
+    if url.scheme() != "https" || url.host_str() != Some("rouman5.com")
+        || url.port().is_some() || !url.username().is_empty() || url.password().is_some()
+        || url.query().is_some() || url.fragment().is_some() {
+        return Err("請使用 rouman5.com 的 HTTPS 章節網址".into());
+    }
+    let segments: Vec<_> = url.path_segments().ok_or("章節網址無效")?.collect();
+    if segments.len() != 3 || segments[0] != "books"
+        || segments[1].len() < 8 || segments[1].len() > 80
+        || !segments[1].bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+        || segments[2].parse::<u32>().ok().filter(|n| *n < 10_000).is_none() {
+        return Err("網址格式應為 https://rouman5.com/books/{作品ID}/{章節索引}".into());
+    }
+    Ok(url)
+}
+
+fn json_string_after(html: &str, needle: &str) -> Option<String> {
+    let after = html.split_once(needle)?.1;
+    let start = after.find('"')?;
+    let json_string = &after[start..];
+    // Use JSON parser to decode escaped titles safely.
+    let mut end = start + 1;
+    let chars = after.as_bytes();
+    let mut escaped = false;
+    while end < chars.len() {
+        let byte = chars[end];
+        if !escaped && byte == b'"' {
+            return serde_json::from_str::<String>(&after[start..=end]).ok();
+        }
+        if !escaped && byte == b'\\' { escaped = true; }
+        else { escaped = false; }
+        end += 1;
+    }
+    let _ = json_string;
+    None
+}
+
+fn parse_rouman_html(html: &str, target: &Url) -> Result<RoumanChapter, String> {
+    // Next.js streamed payload: imagePaths:$R[26]=["https://...", ...]
+    // Reference index changes between renders, so locate the assignment, not [26].
+    let anchor = html.find("imagePaths:$R[").ok_or("章節資料未包含 imagePaths，網站格式可能已變更")?;
+    let after = &html[anchor..];
+    let assignment = after.find("]=[").ok_or("無法定位圖片清單")?;
+    let json_start = anchor + assignment + 2; // opening '['
+    let rest = &html[json_start..];
+    let json_end = rest.find(']').ok_or("圖片清單格式不完整")?;
+    let raw = &rest[..=json_end];
+    let paths: Vec<String> = serde_json::from_str(raw)
+        .map_err(|_| "無法解析 imagePaths JSON")?;
+    if paths.is_empty() || paths.len() > 800 {
+        return Err("圖片清單為空或超出合理數量".into());
+    }
+    let mut urls = Vec::with_capacity(paths.len());
+    for path in paths {
+        let u = Url::parse(&path).map_err(|_| "圖片清單含有不合法網址")?;
+        let host = u.host_str().unwrap_or("");
+        if u.scheme() != "https" || !matches!(host, "v1.towm85.xyz" | "v2.towm85.xyz" | "v3.towm85.xyz" | "v4.towm85.xyz")
+            || !u.path().starts_with("/m/") || u.port().is_some()
+            || !u.username().is_empty() || u.password().is_some() {
+            return Err("圖片清單包含未驗證的來源網域，已停止解析".into());
+        }
+        urls.push(u.to_string());
+    }
+    let book_id = target.path_segments().and_then(|mut x| x.nth(1)).unwrap_or("").to_string();
+    let chapter_index = target.path_segments().and_then(|mut x| x.nth(2))
+        .and_then(|x| x.parse::<u32>().ok()).unwrap_or(0);
+    // Metadata adjacent to imagePaths in the streamed payload. Never use these
+    // fields to generate image URLs; only the explicit source-provided array.
+    let mut start = anchor.saturating_sub(650);
+    while start > 0 && !html.is_char_boundary(start) { start -= 1; }
+    let nearby = &html[start..anchor];
+    let book_title = nearby.rfind("book:$R[")
+        .and_then(|pos| json_string_after(&nearby[pos..], ",name:"))
+        .unwrap_or_else(|| "Rouman5 漫畫".into());
+    let chapter_title = nearby.rfind(",name:")
+        .and_then(|i| json_string_after(&nearby[i..], ",name:"))
+        .unwrap_or_else(|| format!("第 {} 話", chapter_index + 1));
+    let chapter_id = nearby.rfind("chapter:$R[")
+        .and_then(|pos| json_string_after(&nearby[pos..], "id:"))
+        .unwrap_or_default();
+    let chapter_count = nearby.rfind("total:")
+        .and_then(|pos| nearby[pos + 6..].split(|c:char| !c.is_ascii_digit()).next())
+        .and_then(|n| n.parse::<u32>().ok())
+        .unwrap_or(0);
+    Ok(RoumanChapter {book_id, book_title, chapter_id, chapter_title,
+        chapter_index, chapter_count, page_urls: urls, url: target.to_string()})
+}
+
+#[command]
+async fn inspect_rouman_chapter(url: String) -> Result<RoumanChapter, String> {
+    let target = validate_rouman_chapter_url(&url)?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(25))
+        .user_agent("MangaHub/0.5.8 (chapter reader)")
+        .build().map_err(|e| e.to_string())?;
+    let resp = client.get(target.clone()).send().await
+        .map_err(|e| format!("Rouman5 連線失敗：{e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Rouman5 HTTP {}，請確認網址及網站存取限制", resp.status()));
+    }
+    if let Some(t) = resp.headers().get(reqwest::header::CONTENT_TYPE) {
+        if !t.to_str().unwrap_or("").contains("text/html") { return Err("回應不是 HTML".into()); }
+    }
+    if resp.content_length().unwrap_or(0) > 4_000_000 { return Err("HTML 超出大小限制".into()); }
+    let html = resp.text().await.map_err(|_| "無法讀取章節 HTML")?;
+    if html.len() > 4_000_000 { return Err("HTML 超出大小限制".into()); }
+    parse_rouman_html(&html, &target)
+}
+
+#[cfg(test)]
+mod rouman_tests {
+    use super::*;
+    #[test]
+    fn parses_streamed_image_paths() {
+        let target=Url::parse("https://rouman5.com/books/cmegn4syy019ved077i2841wl/0").unwrap();
+        let html=r#"abc,book:$R[24]={id:"cmegn4syy019ved077i2841wl",name:"神聖陷阱"},chapter:$R[25]={id:"chapter123",name:"第1話",ind:0},current:0,total:61,imagePaths:$R[26]=["https://v1.towm85.xyz/m/one.jpg","https://v2.towm85.xyz/m/two.jpg"]xyz"#;
+        let data=parse_rouman_html(html,&target).unwrap();
+        assert_eq!(data.page_urls.len(),2);
+        assert_eq!(data.chapter_count,61);
+        assert_eq!(data.chapter_index,0);
+    }
+    #[test]
+    fn rejects_arbitrary_domains() {
+        assert!(validate_rouman_chapter_url("https://example.com/books/a/0").is_err());
+        let target=Url::parse("https://rouman5.com/books/cmegn4syy019ved077i2841wl/0").unwrap();
+        assert!(parse_rouman_html("imagePaths:$R[7]=[\"https://evil.test/m/a.jpg\"]",&target).is_err());
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![inspect_comicbox_chapter, probe_comicbox_image, probe_comicbox_pair, fetch_nh_gallery, browse_nh_catalog, list_nh_taxonomy, random_nh_gallery, related_nh_galleries, nh_connect, nh_disconnect, nh_session, nh_account_favorites, nh_account_blacklist, nh_account_random_favorite, nh_toggle_remote_favorite, nh_gallery_comments])
+        .invoke_handler(tauri::generate_handler![inspect_rouman_chapter, inspect_comicbox_chapter, probe_comicbox_image, probe_comicbox_pair, fetch_nh_gallery, browse_nh_catalog, list_nh_taxonomy, random_nh_gallery, related_nh_galleries, nh_connect, nh_disconnect, nh_session, nh_account_favorites, nh_account_blacklist, nh_account_random_favorite, nh_toggle_remote_favorite, nh_gallery_comments])
         .run(tauri::generate_context!())
         .expect("error while running MangaHub");
 }
