@@ -185,7 +185,7 @@ function App() {
       <button title="nHentai Gallery" aria-label="nHentai Gallery" className={tab === 'nhentai' ? 'nav active' : 'nav'} onClick={() => openTab('nhentai')}><BookOpen size={19}/><span className="navText">nHentai Gallery</span></button>
       <button title="來源相容性" aria-label="來源相容性" className={tab === 'capabilities' ? 'nav active' : 'nav'} onClick={() => openTab('capabilities')}><Image size={19}/><span className="navText">來源相容性</span></button>
       <button title="來源診斷" aria-label="來源診斷" className={tab === 'diagnostics' ? 'nav active' : 'nav'} onClick={() => openTab('diagnostics')}><Globe2 size={19}/><span className="navText">來源診斷</span></button>
-      <div className="asideFoot"><CircleHelp size={16}/><span className="footText">v0.5.5 · Local-first<br/>無原站廣告、無追蹤 SDK</span></div>
+      <div className="asideFoot"><CircleHelp size={16}/><span className="footText">v0.5.6 · Local-first<br/>無原站廣告、無追蹤 SDK</span></div>
     </aside>
     <main className="main">
       <header><span className="eyebrow"><Globe2 size={15}/> MangaHub / {tab === 'source' ? 'Source Inspector' : tab === 'library' ? 'My Library' : tab === 'chapter' ? 'Chapter' : tab === 'diagnostics' ? 'Diagnostics' : tab === 'capabilities' ? 'Source Capabilities' : tab === 'catalog' ? 'Discover' : tab === 'account' ? 'Account' : tab === 'nhentai' ? 'Gallery' : 'Reader'}</span><span className="status">● Local-first</span></header>

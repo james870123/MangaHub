@@ -6,7 +6,7 @@ export type CatalogItem = { id: number; title: string; coverUrl: string | null; 
 export type GalleryDetail = { id: number; title: string; pageUrls: string[]; coverUrl?: string | null; tags?: string[] };
 export type ReadingRecord = { id: number; title: string; coverUrl: string | null; page: number; total: number; updatedAt: number };
 type CatalogPage = { items: CatalogItem[]; page: number; totalPages: number | null; hasNext: boolean };
-type Mode = 'latest' | 'popular' | 'search' | 'favorites' | 'history';
+type Mode = 'latest' | 'popular' | 'search' | 'categories' | 'favorites' | 'history';
 type Sort = 'date' | 'popular' | 'popular-today' | 'popular-week' | 'popular-month';
 type Props = {
   adultConfirmed: boolean;
@@ -30,6 +30,30 @@ const sorting: { value: Sort; label: string }[] = [
   { value: 'popular-month', label: '本月熱門' },
 ];
 const infoForRecord = (r: ReadingRecord): CatalogItem => ({ id: r.id, title: r.title, coverUrl: r.coverUrl, pageCount: r.total, tags: [] });
+type CategoryKind = 'language' | 'category' | 'artist' | 'group' | 'character' | 'parody' | 'tag';
+type CategoryFilter = { kind: CategoryKind; value: string };
+const categoryKinds: { kind: CategoryKind; label: string; hint: string }[] = [
+  { kind: 'language', label: '語言', hint: '例如 japanese / english / chinese' },
+  { kind: 'category', label: '類型', hint: '例如 manga / doujinshi' },
+  { kind: 'tag', label: '標籤', hint: '輸入標籤英文名稱' },
+  { kind: 'artist', label: '作者', hint: '輸入作者名稱' },
+  { kind: 'group', label: '社團', hint: '輸入社團名稱' },
+  { kind: 'character', label: '角色', hint: '輸入角色名稱' },
+  { kind: 'parody', label: '原作', hint: '輸入原作名稱' },
+];
+const categoryPresets: { label: string; kind: CategoryKind; value: string }[] = [
+  { label: '日文', kind: 'language', value: 'japanese' },
+  { label: '英文', kind: 'language', value: 'english' },
+  { label: '中文', kind: 'language', value: 'chinese' },
+  { label: '漫畫 Manga', kind: 'category', value: 'manga' },
+  { label: '同人誌 Doujinshi', kind: 'category', value: 'doujinshi' },
+];
+function categoryTerm(filter: CategoryFilter): string {
+  // Quoted value is interpreted by the public search API. Never interpolate untrusted URL paths.
+  const clean = filter.value.replace(/["\\]/g, '').trim().replace(/\s+/g, ' ');
+  return `${filter.kind}:"${clean}"`;
+}
+
 
 export default function NhCatalog(props: Props) {
   const { adultConfirmed, showCovers, onAdultChange, onCoversChange, favorites, onToggleFavorite, history, onClearHistory, onReadGallery, onRepairHistoryCover, blockedTags, onOpenComments } = props;
@@ -54,27 +78,45 @@ export default function NhCatalog(props: Props) {
   const [jumpPage, setJumpPage] = useState('');
   const [searchKind, setSearchKind] = useState('');
   const [searchValue, setSearchValue] = useState('');
+  const [categoryFilters, setCategoryFilters] = useState<CategoryFilter[]>([]);
+  const [categoryKind, setCategoryKind] = useState<CategoryKind>('language');
+  const [categoryValue, setCategoryValue] = useState('');
+  const categoryQuery = categoryFilters.map(categoryTerm).join(' ');
+  const categoryHasQuery = categoryFilters.length > 0;
+  function toggleCategory(kind: CategoryKind, value: string) {
+    const clean = value.replace(/["\\]/g, '').trim().replace(/\s+/g, ' ').slice(0, 80);
+    if (!clean) return;
+    setCategoryFilters(prev => prev.some(f => f.kind === kind && f.value.toLowerCase() === clean.toLowerCase())
+      ? prev.filter(f => !(f.kind === kind && f.value.toLowerCase() === clean.toLowerCase()))
+      : [...prev, { kind, value: clean }].slice(0, 6));
+    setPage(1);
+    setDetail(null);
+  }
+
 
   // Search is useful before a keyword is entered: default to the newest public
   // catalog, or today's popular public catalog, without making an invalid
   // /api/v2/search request with an empty query.
   const searchHasQuery = submitted.trim().length > 0;
-  const browseMode: 'latest' | 'popular' | 'search' = mode === 'search' && !searchHasQuery
+  const browseMode: 'latest' | 'popular' | 'search' = mode === 'categories' ? 'search' : mode === 'search' && !searchHasQuery
     ? (sort === 'popular-today' ? 'popular' : 'latest')
     : mode === 'popular' ? 'popular' : mode === 'search' ? 'search' : 'latest';
 
   useEffect(() => {
-    if (!adultConfirmed || mode === 'favorites' || mode === 'history') return;
+    if (!adultConfirmed || mode === 'favorites' || mode === 'history' || (mode === 'categories' && !categoryHasQuery)) {
+      if (mode === 'categories' && !categoryHasQuery) { setResult(null); setError(''); setLoading(false); }
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setError('');
     setResult(null);
-    void invoke<CatalogPage>('browse_nh_catalog', { mode: browseMode, query: submitted, sort, page })
+    void invoke<CatalogPage>('browse_nh_catalog', { mode: browseMode, query: mode === 'categories' ? categoryQuery : submitted, sort, page })
       .then(value => { if (!cancelled) setResult(value); })
       .catch(err => { if (!cancelled) setError(String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [adultConfirmed, mode, browseMode, submitted, sort, page, refresh]);
+  }, [adultConfirmed, mode, browseMode, submitted, sort, page, refresh, categoryQuery, categoryHasQuery]);
 
   const changeMode = (next: Mode) => {
     setMode(next);
@@ -136,7 +178,7 @@ export default function NhCatalog(props: Props) {
     <h1>探索<span>漫畫</span></h1>
     <p className="lead">瀏覽最新、熱門、搜尋與本機書架。封面預設隱藏，只有你允許時才顯示。</p>
     <div className="catalogTabs">
-      {([['latest','最新'],['popular','熱門'],['search','搜尋'],['favorites','我的收藏'],['history','最近閱讀']] as [Mode,string][]).map(([value,label]) => <button key={value} className={mode === value ? 'on' : ''} onClick={() => changeMode(value)}>{label}</button>)}
+      {([['latest','最新'],['popular','熱門'],['search','搜尋'],['categories','分類'],['favorites','我的收藏'],['history','最近閱讀']] as [Mode,string][]).map(([value,label]) => <button key={value} className={mode === value ? 'on' : ''} onClick={() => changeMode(value)}>{label}</button>)}
     </div>
     <div className="catalogControls">
       <button className="secondaryButton" onClick={() => onCoversChange(!showCovers)}>{showCovers ? <Eye size={17}/> : <EyeOff size={17}/>} {showCovers ? '隱藏封面' : '顯示成人封面'}</button>
@@ -159,10 +201,31 @@ export default function NhCatalog(props: Props) {
     {mode === 'search' && <div className="catalogSort"><label>排序 <select value={sort} onChange={e => { setSort(e.target.value as Sort); setPage(1); }}>{sorting.map(option => <option key={option.value} value={option.value} disabled={!searchHasQuery && option.value !== 'date' && option.value !== 'popular-today'}>{option.label}{!searchHasQuery && option.value !== 'date' && option.value !== 'popular-today' ? '（需關鍵字）' : ''}</option>)}</select></label>
       {!searchHasQuery && <p className="detailNote">尚未輸入關鍵字：可直接瀏覽「最新」與「今日熱門」。其他熱門排序需要先搜尋作品。</p>}
     </div>}
+    {mode === 'categories' && <div className="categoryBrowser">
+      <div className="notice"><BookOpen size={19}/><div><b>依分類探索作品</b><p>可選多個條件組合查詢。例如「日文 + 漫畫」，或「作者 + 語言」。分類條件透過既有的官方搜尋 API 查詢，並非離線建立的完整標籤目錄。</p></div></div>
+      <div className="categoryPresets">
+        <strong>快速分類</strong>
+        <div className="categoryPresetButtons">{categoryPresets.map(x => {
+          const active = categoryFilters.some(f => f.kind === x.kind && f.value === x.value);
+          return <button type="button" key={`${x.kind}-${x.value}`} className={active ? 'on' : ''} aria-pressed={active} onClick={() => toggleCategory(x.kind, x.value)}>{x.label}</button>;
+        })}</div>
+      </div>
+      <form className="categoryCustom" onSubmit={e => { e.preventDefault(); toggleCategory(categoryKind, categoryValue); setCategoryValue(''); }}>
+        <label>分類欄位 <select value={categoryKind} onChange={e => setCategoryKind(e.target.value as CategoryKind)}>{categoryKinds.map(c => <option key={c.kind} value={c.kind}>{c.label}</option>)}</select></label>
+        <input aria-label="分類名稱" value={categoryValue} maxLength={80} onChange={e => setCategoryValue(e.target.value)} placeholder={categoryKinds.find(c => c.kind === categoryKind)?.hint ?? '輸入分類'} />
+        <button type="submit" disabled={!categoryValue.trim() || categoryFilters.length >= 6}>加入分類</button>
+      </form>
+      {categoryFilters.length > 0 && <div className="categoryActiveFilters" aria-label="已選分類條件">
+        {categoryFilters.map((filter, i) => <button type="button" key={`${filter.kind}:${filter.value}:${i}`} onClick={() => toggleCategory(filter.kind, filter.value)} title="移除此條件">{categoryKinds.find(k => k.kind === filter.kind)?.label}：{filter.value} ×</button>)}
+        <button type="button" onClick={() => { setCategoryFilters([]); setPage(1); }}>清除全部</button>
+      </div>}
+      <div className="catalogSort"><label>分類排序 <select value={sort} onChange={e => { setSort(e.target.value as Sort); setPage(1); }}>{sorting.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label></div>
+      {!categoryHasQuery && <div className="categoryEmpty">請先選擇上面的分類，或輸入作者、社團、角色、原作與標籤。</div>}
+    </div>}
     {mode === 'popular' && <div className="notice"><Star size={18}/><div><b>今日熱門</b><p>使用來源 API 的熱門作品端點。若要搜尋「全部熱門／本週熱門」，請到搜尋頁選擇對應排序。</p></div></div>}
     {loading && <div className="catalogStatus"><LoaderCircle className="spin" size={24}/> 正在讀取作品資訊…</div>}
     {error && <div className="error"><strong>無法取得目錄</strong><p>{error}</p><small>遇到 403／429 不會自動重試。請遵守來源站的請求限制。</small></div>}
-    {!loading && !error && visibleItems.length === 0 && <div className="empty"><BookOpen size={34}/><h2>目前沒有作品</h2><p>{mode === 'favorites' ? '點選漫畫詳情中的收藏按鈕即可加入。' : mode === 'history' ? '開始閱讀後，作品會出現在這裡。' : '可嘗試其他搜尋關鍵字或稍後重新整理。'}</p></div>}
+    {!loading && !error && (mode !== 'categories' || categoryHasQuery) && visibleItems.length === 0 && <div className="empty"><BookOpen size={34}/><h2>目前沒有作品</h2><p>{mode === 'favorites' ? '點選漫畫詳情中的收藏按鈕即可加入。' : mode === 'history' ? '開始閱讀後，作品會出現在這裡。' : '可嘗試其他搜尋關鍵字或稍後重新整理。'}</p></div>}
     {blockedTags.length>0 && <p className="catalogBlockedNotice">已啟用 {blockedTags.length} 個黑名單標籤（僅篩選 API 已提供標籤的作品）</p>}
     <div className="catalogGrid">{filteredItems.map(item => <article key={item.id} className="catalogCard">
       <button className="catalogCardMain" onClick={() => void openDetail(item)} aria-label={`查看 ${item.title}`}>
@@ -171,7 +234,7 @@ export default function NhCatalog(props: Props) {
       </button>
       <button className="catalogHeart" aria-label={favorites.some(f => f.id === item.id) ? '取消收藏' : '收藏'} onClick={() => onToggleFavorite(item)}><Heart size={18} fill={favorites.some(f => f.id === item.id) ? 'currentColor' : 'none'}/></button>
     </article>)}</div>
-    {(mode === 'latest' || (mode === 'search' && browseMode !== 'popular')) && result && <div className="catalogPager">
+    {(mode === 'latest' || mode === 'categories' || (mode === 'search' && browseMode !== 'popular')) && result && <div className="catalogPager">
       <button disabled={page <= 1 || loading} onClick={() => setPage(n => Math.max(1, n - 1))}><ChevronLeft size={18}/> 上一頁</button>
       <span>第 {page} 頁{result.totalPages ? ` / ${result.totalPages} 頁` : ''}</span>
       <form className="catalogPageJump" onSubmit={e => { e.preventDefault(); const n=Number(jumpPage); if(Number.isInteger(n) && n>=1 && n<=Math.min(result.totalPages ?? 1000,1000)) setPage(n); }}>

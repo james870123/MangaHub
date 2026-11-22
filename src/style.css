@@ -120,3 +120,19 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .accountComment{border-bottom:1px solid #383447;padding:12px 4px;white-space:pre-wrap;overflow-wrap:anywhere}
 .accountComment p{margin:7px 0 0;color:#ddd2e1}
 .catalogBlockedNotice{color:#baa5c6;font-size:12px;margin:8px 0}
+
+/* v0.5.6 category browsing */
+.categoryBrowser{margin:16px 0 24px;display:grid;gap:16px}
+.categoryPresets{background:#1c1e27;border:1px solid #393447;border-radius:12px;padding:16px;display:grid;gap:12px}
+.categoryPresets>strong{color:#dac1e5;font-size:14px}
+.categoryPresetButtons,.categoryActiveFilters{display:flex;gap:8px;flex-wrap:wrap}
+.categoryPresetButtons button,.categoryActiveFilters button{background:#282432;color:#e5d6eb;border:1px solid #554261;border-radius:9px;padding:9px 13px;cursor:pointer}
+.categoryPresetButtons button.on{background:#674277;border-color:#b388c9;color:white}
+.categoryCustom{display:flex;flex-wrap:wrap;gap:9px;align-items:end}
+.categoryCustom label{display:grid;gap:5px;color:#bcb4c4;font-size:13px}
+.categoryCustom select,.categoryCustom input{background:#21232d;color:#f2e7f7;border:1px solid #554261;border-radius:9px;padding:11px;min-height:42px}
+.categoryCustom input{flex:1;min-width:190px}
+.categoryCustom>button{background:#583965;color:white;border:1px solid #9d70ad;border-radius:9px;padding:11px 15px;cursor:pointer}
+.categoryCustom>button:disabled{opacity:.45;cursor:not-allowed}
+.categoryActiveFilters button{font-size:12px;background:#463052}
+.categoryEmpty{border:1px dashed #594862;border-radius:12px;padding:20px;color:#ac9fb7;text-align:center}
