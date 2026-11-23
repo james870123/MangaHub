@@ -370,3 +370,16 @@ button, input, select, textarea { touch-action: manipulation; }
 @media (max-width:750px) and (prefers-reduced-motion:reduce) {
   .mh-mobile-reader-dock, .reader-active .readerContent { transition:none; }
 }
+
+/* v0.6.6 — manual Rouman5 update tracking; no background polling. */
+.shelfUpdatePanel{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:16px 18px;border:1px solid #4e3c61;border-radius:14px;background:#25202d;margin:20px 0 8px}
+.shelfUpdatePanel>div:first-child{flex:1;min-width:230px}
+.shelfUpdatePanel strong{display:flex;align-items:center;gap:8px;color:#efdcff}
+.shelfUpdatePanel p{font-size:13px;color:#c0b5c9;margin:7px 0}
+.shelfUpdatePanel small{color:#b7a5c5}
+.shelfUpdateActions{display:flex;align-items:center;flex-wrap:wrap;gap:12px}
+.shelfUpdateActions button,.shelfNewChapter button{display:inline-flex;gap:7px;align-items:center;justify-content:center}
+.shelfUpdateActions label{display:inline-flex;align-items:center;gap:6px;font-size:13px}
+.shelfUpdatePanel .shelfUpdateStatus{width:100%;margin:0;color:#e5d2f1}
+.shelfNewChapter{display:flex;align-items:center;flex-wrap:wrap;gap:6px;font-size:12px;color:#efd1ff;font-weight:700}
+.shelfNewChapter button{border:1px solid #6c537d;border-radius:8px;background:#3e2b4c;color:#fff;padding:3px 8px;font-size:12px}
