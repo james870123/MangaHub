@@ -111,7 +111,7 @@ function App(){
     if(!currentGallery)return;
     setNhHistory(prev=>prev.map(r=>r.id===currentGallery.id&&r.page!==page?{...r,page,updatedAt:Date.now()}:r));
   },[currentGallery,setNhHistory]);
-  return <div className={sidebarCollapsed?'app sidebar-collapsed':'app'}>
+  return <div className={`${sidebarCollapsed ? 'app sidebar-collapsed' : 'app'}${tab === 'reader' ? ' reader-active' : ''}`}>
     <aside className="sidebar">
       <div className="brand"><div className="brandicon"><BookOpen size={22}/></div><div className="brandText"><strong>MangaHub</strong><small>YOUR READING SPACE</small></div></div>
       <button className="sidebarToggle" onClick={()=>setSidebarCollapsed(v=>!v)} title={sidebarCollapsed?'展開側邊欄':'收合側邊欄'}>{sidebarCollapsed?<PanelLeftOpen size={19}/>:<PanelLeftClose size={19}/>}<span>{sidebarCollapsed?'展開選單':'收合選單'}</span></button>
@@ -120,7 +120,7 @@ function App(){
       <button className={tab==='rouman'?'nav active':'nav'} onClick={()=>showTab('rouman')}><BookOpen size={19}/><span className="navText">Rouman5 探索</span></button>
       <button className={tab==='library'?'nav active':'nav'} onClick={()=>showTab('library')}><Library size={19}/><span className="navText">我的漫畫書架</span></button>
       <button className={tab==='account'?'nav active':'nav'} onClick={()=>showTab('account')}><UserRound size={19}/><span className="navText">帳號與同步</span></button>
-      <div className="asideFoot"><span className="footText">v0.6.2 · Local-first</span></div>
+      <div className="asideFoot"><span className="footText">v0.6.5 · Local-first</span></div>
     </aside>
     <main className="main"><header><span className="eyebrow">MangaHub / {tab==='catalog'?'nHentai':tab==='rouman'?'Rouman5':tab==='library'?'My Library':tab==='account'?'Account':'Reader'}</span><span className="status">● Local-first</span></header>
       <div className={tab==='catalog'?'catalogView':'catalogView is-hidden'}><NhCatalog adultConfirmed={adultConfirmed} showCovers={showCovers} onAdultChange={setAdultConfirmed} onCoversChange={setShowCovers} favorites={nhFavorites} onToggleFavorite={toggleNhFavorite} history={nhHistory} onClearHistory={()=>setNhHistory([])} onReadGallery={readNhGallery} onRepairHistoryCover={repairHistoryCover} blockedTags={blockedTags} onOpenComments={id=>{setAccountGalleryId(id);setTab('account');window.scrollTo(0,0);}}/></div>

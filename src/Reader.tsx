@@ -136,6 +136,8 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
   const localUrls = useRef<string[]>([]);
   const [page, setPage] = useState(() => Math.max(0, (resumePage ?? 1) - 1));
   const [zoom, setZoom] = useState(100);
+  const [focusMode, setFocusMode] = useState(false);
+  const touchStart = useRef<{ x: number; y: number; at: number } | null>(null);
   const [cacheLimitMb, setCacheLimitMb] = useState(() => { const n = Number(safeRead(STORAGE_CACHE_LIMIT, '0')); return [0, 500, 1024, 2048].includes(n) ? n : 0; });
   const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
   const [cacheMessage, setCacheMessage] = useState('');
@@ -277,8 +279,34 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
     return () => { for (const img of pending) img.src = ''; };
   }, [page, mode, sources]);
   const current = Math.min(page, Math.max(0, sources.length - 1));
+  // Touch navigation only applies to single-page mode. Vertical scrolling is never intercepted.
+  const onSingleTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (event.touches.length !== 1) { touchStart.current = null; return; }
+    const touch = event.touches[0];
+    touchStart.current = { x: touch.clientX, y: touch.clientY, at: Date.now() };
+  };
+  const onSingleTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+    const origin = touchStart.current;
+    touchStart.current = null;
+    if (!origin || event.changedTouches.length !== 1 || mode === 'vertical') return;
+    const target = event.target as HTMLElement;
+    if (target.closest('button, input, select, textarea, a')) return;
+    const touch = event.changedTouches[0];
+    const dx = touch.clientX - origin.x, dy = touch.clientY - origin.y;
+    // Ignore vertical scrolling, slow drags and short accidental gestures.
+    if (Date.now() - origin.at > 1000 || Math.abs(dx) < 55 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
+    const forward = mode === 'rtl' ? dx > 0 : dx < 0;
+    goTo(current + (forward ? 1 : -1));
+  };
+  const mobileJump = (delta: number) => {
+    if (mode !== 'vertical') { goTo(current + delta); return; }
+    const next = Math.max(0, Math.min(sources.length - 1, scrollPage + delta));
+    const slot = scroller.current?.querySelector<HTMLElement>(`[data-page="${next + 1}"]`);
+    slot?.scrollIntoView({ block: 'start', behavior: 'instant' });
+    setScrollPage(next);
+  };
   // Offscreen images recycle their decoded resources; scroll events still track progress independently.
-  return <section className="content readerContent">
+  return <section className={`content readerContent${focusMode ? ' reader-focus' : ''}`}>
     {onBack && <div className="readerReturnBar"><button className="readerBack" onClick={onBack} title="返回先前瀏覽的列表（Esc / Alt+←）"><ArrowLeft size={18}/> {backLabel ?? '返回上一頁'}</button><span>Esc / Alt + ← 返回</span></div>}
     <div className="pill">MANGAHUB · READER</div>
     <h1>{galleryTitle ? <>正在<span>閱讀</span></> : <>圖片<span>閱讀器</span></>}</h1>
@@ -297,6 +325,7 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
         <button className={mode === 'rtl' ? 'toggle on' : 'toggle'} onClick={() => setMode('rtl')}>右至左</button>
       </div>
     </div>
+    {sources.length > 0 && <div className="mh-reader-focus-toggle"><button className="toggle" onClick={() => setFocusMode(v => !v)} aria-pressed={focusMode}>{focusMode ? '顯示閱讀設定' : '專注閱讀（收合設定）'}</button></div>}
     {sources.length > 0 && <div className="mh-reader-settings">
       <label>縮放 <input type="range" min="60" max="150" step="10" value={zoom} onChange={e => setZoom(Number(e.target.value))}/> {zoom}%</label>
       <button className="toggle" onClick={() => setZoom(100)}><ZoomOut size={14}/> 重設</button>
@@ -315,7 +344,7 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
     {sources.length === 0 ? <div className="empty"><ImagePlus size={34}/><h2>等待圖片</h2><p>可選取自己的漫畫圖片，或貼上有權存取的 HTTPS 圖片網址。</p></div> : mode === 'vertical' ?
       <div ref={scroller} className="scrollReader mh-scroll-reader" style={{ '--reader-width': `${zoom}%` } as React.CSSProperties}>
         {sources.map((item, i) => <ReaderImage key={`${item.url}-${i}`} src={item.url} index={i} eager={false} cacheLimitMb={cacheLimitMb} />)}
-      </div> : <div className="singleReader mh-single-reader">
+      </div> : <div className="singleReader mh-single-reader" onTouchStart={onSingleTouchStart} onTouchEnd={onSingleTouchEnd}>
         <div className="pager">
           <button disabled={current === 0} onClick={() => goTo(current - 1)}><ChevronLeft size={16}/> 上一頁</button>
           <span>{current + 1} / {sources.length}</span>
@@ -326,6 +355,13 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
         </div>
         <p className="mh-help">方向鍵可翻頁（右至左模式會反轉方向）。圖片若因來源站限制無法直接載入，請使用合法提供的圖片檔案。</p>
       </div>}
+    {sources.length > 0 && <nav className="mh-mobile-reader-dock" aria-label="手機閱讀控制列">
+      {onBack && <button className="mh-mobile-dock-back" onClick={onBack} aria-label="返回漫畫列表"><ArrowLeft size={19}/></button>}
+      <button onClick={() => mobileJump(-1)} disabled={(mode === 'vertical' ? scrollPage : current) === 0} aria-label="上一頁"><ChevronLeft size={20}/></button>
+      <span aria-live="off">{Math.min(sources.length, mode === 'vertical' ? scrollPage + 1 : current + 1)} / {sources.length}</span>
+      <button onClick={() => mobileJump(1)} disabled={(mode === 'vertical' ? scrollPage : current) >= sources.length - 1} aria-label="下一頁"><ChevronRight size={20}/></button>
+      <button className="mh-mobile-dock-focus" onClick={() => setFocusMode(v => !v)} aria-pressed={focusMode}>{focusMode ? '設定' : '專注'}</button>
+    </nav>}
     <p className="detailNote">遠端圖片網址與閱讀進度僅儲存於本機。選取的本機圖片在關閉 App 後需重新選取。ComicBox 的分段／處理後圖片不在此版本的支援範圍。</p>
   </section>;
 }
