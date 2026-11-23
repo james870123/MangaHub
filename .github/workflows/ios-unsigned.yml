@@ -1,0 +1,44 @@
+name: Build iOS Unsigned IPA (Sideloadly)
+on:
+  workflow_dispatch:
+
+jobs:
+  ios-unsigned:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> target'
+      - name: Install dependencies
+        run: npm install
+      - name: Initialize iOS project
+        run: npm run tauri ios init -- --ci
+      - name: Build unsigned iOS archive
+        run: npm run tauri ios build -- --target aarch64 --no-sign --archive-only --ci
+      - name: Create unsigned IPA for Sideloadly
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$(find src-tauri/gen/apple/build -type d -path '*/Products/Applications/*.app' -print -quit)"
+          if [ -z "$APP" ]; then
+            echo 'iOS .app not found in .xcarchive'; exit 1
+          fi
+          mkdir -p ipa/Payload
+          ditto "$APP" "ipa/Payload/$(basename "$APP")"
+          cd ipa
+          zip -qry ../MangaHub-iOS-unsigned.ipa Payload
+          cd ..
+          unzip -t MangaHub-iOS-unsigned.ipa | tail -2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MangaHub-iOS-Unsigned-IPA
+          path: MangaHub-iOS-unsigned.ipa
+          if-no-files-found: error
