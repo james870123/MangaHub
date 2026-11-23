@@ -63,7 +63,9 @@ function ReaderImage({ src, index, eager, onVisible }: { src: string; index: num
   </div>;
 }
 
-export default function Reader({ initialUrls, onProgress, onBack, backLabel, galleryTitle }: { initialUrls?: string[]; onProgress?: (page: number) => void; onBack?: () => void; backLabel?: string; galleryTitle?: string }) {
+export default function Reader({ initialUrls, initialPage, progressKey, onProgress, onBack, backLabel, galleryTitle }: { initialUrls?: string[]; initialPage?: number; progressKey?: string; onProgress?: (page: number) => void; onBack?: () => void; backLabel?: string; galleryTitle?: string }) {
+  // Freeze restore target for this Reader mount; progress changes must not restart restore.
+  const resumePage = useRef(initialPage).current;
   const [imageText, setImageText] = useState(() => initialUrls?.join('\n') ?? safeRead(STORAGE_URLS, ''));
   const [mode, setMode] = useState<ReadingMode>(() => {
     const value = safeRead(STORAGE_MODE, 'vertical');
@@ -71,15 +73,19 @@ export default function Reader({ initialUrls, onProgress, onBack, backLabel, gal
   });
   const [localPages, setLocalPages] = useState<PageSource[]>([]);
   const localUrls = useRef<string[]>([]);
-  const [page, setPage] = useState(0);
+  const [page, setPage] = useState(() => Math.max(0, (resumePage ?? 1) - 1));
   const [zoom, setZoom] = useState(100);
-  const [scrollPage, setScrollPage] = useState(0);
+  const [scrollPage, setScrollPage] = useState(() => Math.max(0, (resumePage ?? 1) - 1));
+  const restoring = useRef(false);
+  const restoreTimer = useRef<number | null>(null);
+  const scrollRaf = useRef<number | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const remoteUrls = useMemo(() => imageText.split(/\r?\n/).map(x => x.trim()).filter(Boolean), [imageText]);
   const invalidUrls = useMemo(() => remoteUrls.filter(x => !isSupportedHttps(x)), [remoteUrls]);
   const validUrls = useMemo(() => remoteUrls.filter(isSupportedHttps), [remoteUrls]);
   const sources = useMemo<PageSource[]>(() => [...localPages, ...validUrls.map((url, i) => ({url, label: `網址圖片 ${i + 1}`}))], [localPages, validUrls]);
-  const sessionKey = localPages.length ? '' : hashList(validUrls);
+  // Rouman5 chapter identity stays stable even if signed CDN URLs change.
+  const sessionKey = localPages.length ? '' : (progressKey || hashList(validUrls));
   const lastKey = useRef('');
   useEffect(() => { try { localStorage.setItem(STORAGE_URLS, imageText); } catch { /* storage disabled */ } }, [imageText]);
   useEffect(() => { try { localStorage.setItem(STORAGE_MODE, mode); } catch { /* storage disabled */ } }, [mode]);
@@ -88,9 +94,10 @@ export default function Reader({ initialUrls, onProgress, onBack, backLabel, gal
     lastKey.current = sessionKey;
     let saved = 0;
     try { const data = JSON.parse(safeRead(STORAGE_PROGRESS, '{}')) as Record<string, number>; saved = sessionKey ? data[sessionKey] ?? 0 : 0; } catch { /* corrupted progress */ }
-    setPage(Math.max(0, Math.min(saved, Math.max(0, sources.length - 1))));
-    setScrollPage(0);
-  }, [sessionKey, sources.length]);
+    const restored = Math.max(0, Math.min((resumePage != null ? resumePage - 1 : saved), Math.max(0, sources.length - 1)));
+    setPage(restored);
+    setScrollPage(restored);
+  }, [sessionKey, sources.length, resumePage]);
   useEffect(() => {
     if (!sessionKey || !sources.length) return;
     try {
@@ -102,6 +109,56 @@ export default function Reader({ initialUrls, onProgress, onBack, backLabel, gal
       localStorage.setItem(STORAGE_PROGRESS, JSON.stringify(data));
     } catch { /* private mode or storage disabled */ }
   }, [sessionKey, sources.length, mode, page, scrollPage]);
+  // Restore the vertical reader to the previously seen image. The index is 0-based
+  // internally; it is 1-based everywhere in history and callbacks.
+  useEffect(() => {
+    if (!sources.length || mode !== 'vertical' || (resumePage ?? 1) <= 1) return;
+    const targetPage = Math.min(Math.max(1, resumePage ?? 1), sources.length);
+    restoring.current = true;
+    let frame = window.requestAnimationFrame(() => {
+      frame = window.requestAnimationFrame(() => {
+        const slot = scroller.current?.querySelector(`[data-page="${targetPage}"]`);
+        slot?.scrollIntoView({ block: 'start', behavior: 'instant' });
+        // Intersection observers can report intermediate pages while scrolling.
+        restoreTimer.current = window.setTimeout(() => { restoring.current = false; }, 700);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (restoreTimer.current !== null) window.clearTimeout(restoreTimer.current);
+      restoring.current = false;
+    };
+  }, [sessionKey, mode, sources.length, resumePage]);
+  // Unlike the image prefetch observer, scroll position is measured against the
+  // actual viewport so offscreen prefetched images cannot overwrite progress.
+  const updateVerticalPage = useCallback(() => {
+    if (restoring.current || !scroller.current) return;
+    const slots = scroller.current.querySelectorAll<HTMLElement>('[data-page]');
+    const markerY = window.innerHeight * 0.32;
+    let result = 0;
+    for (const slot of slots) {
+      const rect = slot.getBoundingClientRect();
+      if (rect.top <= markerY) result = Number(slot.dataset.page || 1) - 1;
+      else break;
+    }
+    setScrollPage(p => p === result ? p : result);
+  }, []);
+  useEffect(() => {
+    if (mode !== 'vertical' || !sources.length) return;
+    const onScroll = () => {
+      if (scrollRaf.current !== null) return;
+      scrollRaf.current = window.requestAnimationFrame(() => {
+        scrollRaf.current = null;
+        updateVerticalPage();
+      });
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      if (scrollRaf.current !== null) window.cancelAnimationFrame(scrollRaf.current);
+      scrollRaf.current = null;
+    };
+  }, [mode, sources.length, updateVerticalPage]);
   const onProgressRef = useRef(onProgress);
   useEffect(() => { onProgressRef.current = onProgress; }, [onProgress]);
   const currentProgress = mode === 'vertical' ? scrollPage + 1 : page + 1;
@@ -142,15 +199,7 @@ export default function Reader({ initialUrls, onProgress, onBack, backLabel, gal
     return () => { for (const img of pending) img.src = ''; };
   }, [page, mode, sources]);
   const current = Math.min(page, Math.max(0, sources.length - 1));
-  const onVisible = useCallback((index: number) => {
-    const parent = scroller.current;
-    if (!parent) return;
-    const target = parent.querySelector(`[data-page="${index + 1}"]`);
-    if (target) {
-      const rect = target.getBoundingClientRect();
-      if (rect.top >= -80 && rect.top < window.innerHeight * .75) setScrollPage(index);
-    }
-  }, []);
+  // Visibility observation is used for image loading only; scroll events track progress.
   return <section className="content readerContent">
     {onBack && <div className="readerReturnBar"><button className="readerBack" onClick={onBack} title="返回先前瀏覽的列表（Esc / Alt+←）"><ArrowLeft size={18}/> {backLabel ?? '返回上一頁'}</button><span>Esc / Alt + ← 返回</span></div>}
     <div className="pill">MANGAHUB · READER</div>
@@ -177,7 +226,7 @@ export default function Reader({ initialUrls, onProgress, onBack, backLabel, gal
     </div>}
     {sources.length === 0 ? <div className="empty"><ImagePlus size={34}/><h2>等待圖片</h2><p>可選取自己的漫畫圖片，或貼上有權存取的 HTTPS 圖片網址。</p></div> : mode === 'vertical' ?
       <div ref={scroller} className="scrollReader mh-scroll-reader" style={{ '--reader-width': `${zoom}%` } as React.CSSProperties}>
-        {sources.map((item, i) => <ReaderImage key={`${item.url}-${i}`} src={item.url} index={i} eager={i < 2} onVisible={onVisible}/>)}
+        {sources.map((item, i) => <ReaderImage key={`${item.url}-${i}`} src={item.url} index={i} eager={i < 2} />)}
       </div> : <div className="singleReader mh-single-reader">
         <div className="pager">
           <button disabled={current === 0} onClick={() => goTo(current - 1)}><ChevronLeft size={16}/> 上一頁</button>

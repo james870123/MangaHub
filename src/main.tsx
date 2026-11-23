@@ -70,6 +70,9 @@ function App() {
   });
   const applyBlockedTags = useCallback((names:string[])=>setBlockedTags(names),[]);
   const [accountGalleryId,setAccountGalleryId]=useState<number|null>(null);
+  type RoumanPageRecord = { page: number; total: number; updatedAt: number };
+  const [roumanPages, setRoumanPages] = useSaved<Record<string, RoumanPageRecord>>('mangahub-rouman-page-progress-v062', {});
+  const roumanPageKey = (chapter: RoumanChapter) => `${chapter.bookId}:${chapter.chapterId || chapter.chapterIndex}`;
   const [roumanReading, setRoumanReading] = useState<RoumanChapter | null>(null);
   const [currentGallery, setCurrentGallery] = useState<GalleryDetail | null>(null);
   const toggleNhFavorite = (item: CatalogItem) => setNhFavorites(prev => prev.some(x => x.id === item.id) ? prev.filter(x => x.id !== item.id) : [item, ...prev].slice(0, 500));
@@ -119,6 +122,16 @@ function App() {
     } catch(e) { window.alert('無法開啟作品：' + String(e)); }
   }
   function openAccountComments(id:number) {setAccountGalleryId(id);setTab('account');window.scrollTo(0,0);}
+  function recordRoumanProgress(page: number) {
+    if (!roumanReading) return;
+    const key = roumanPageKey(roumanReading);
+    const total = roumanReading.pageUrls.length;
+    const validPage = Math.max(1, Math.min(page, total));
+    setRoumanPages(prev => {
+      if (prev[key]?.page === validPage && prev[key]?.total === total) return prev;
+      return { ...prev, [key]: { page: validPage, total, updatedAt: Date.now() } };
+    });
+  }
   function recordNhProgress(page: number) {
     if (!currentGallery) return;
     setNhHistory(prev => prev.map(r => r.id === currentGallery.id && r.page !== page ? { ...r, page, updatedAt: Date.now() } : r));
@@ -237,10 +250,10 @@ function App() {
       <div className={tab === 'capabilities' ? 'sourceView' : 'sourceView is-hidden'}><SourceCapabilities onRead={urls => readDirectImages(urls, 'capabilities')}/></div>
       <div className={tab === 'nhentai' ? 'sourceView' : 'sourceView is-hidden'}><NhentaiSource onRead={urls => readDirectImages(urls, 'nhentai')}/></div>
       <div className={tab === 'catalog' ? 'catalogView' : 'catalogView is-hidden'}><NhCatalog adultConfirmed={adultConfirmed} showCovers={showCovers} onAdultChange={setAdultConfirmed} onCoversChange={setShowCovers} favorites={nhFavorites} onToggleFavorite={toggleNhFavorite} history={nhHistory} onClearHistory={() => setNhHistory([])} onReadGallery={readNhGallery} onRepairHistoryCover={repairHistoryCover} blockedTags={blockedTags} onOpenComments={openAccountComments}/></div>
-      <div className={tab === 'rouman' ? 'sourceView' : 'sourceView is-hidden'}><RoumanSource active={tab === 'rouman'} onRead={readRoumanChapter} nhHistory={nhHistory} onOpenNh={openRoumanNhGallery}/></div>
+      <div className={tab === 'rouman' ? 'sourceView' : 'sourceView is-hidden'}><RoumanSource active={tab === 'rouman'} onRead={readRoumanChapter} nhHistory={nhHistory} onOpenNh={openRoumanNhGallery} pageProgress={roumanPages}/></div>
       {tab === 'account' && <NhAccount onSyncFavorites={syncOfficialFavorites} onRemoteFavorite={handleRemoteFavorite} onOpenGallery={id=>void openAccountGallery(id)} onBlacklistUpdated={applyBlockedTags} selectedGalleryId={accountGalleryId}/>}
       {tab === 'diagnostics' && <SourceDiagnostics/>}
-      {tab === 'reader' && <Reader key={readerSession} initialUrls={readerUrls} onProgress={currentGallery ? recordNhProgress : undefined} galleryTitle={currentGallery?.title ?? (roumanReading ? `${roumanReading.bookTitle} · ${roumanReading.chapterTitle}` : undefined)} onBack={readerReturn ? returnFromReader : undefined} backLabel={readerReturn === 'catalog' ? '返回漫畫列表' : readerReturn === 'nhentai' ? '返回 Gallery' : readerReturn === 'account' ? '返回帳號頁' : readerReturn === 'rouman' ? '返回 Rouman5 章節' : '返回來源頁'}/>} 
+      {tab === 'reader' && <Reader key={readerSession} initialUrls={readerUrls} initialPage={roumanReading ? (roumanPages[roumanPageKey(roumanReading)]?.page ?? 1) : undefined} progressKey={roumanReading ? `rouman:${roumanPageKey(roumanReading)}` : undefined} onProgress={currentGallery ? recordNhProgress : roumanReading ? recordRoumanProgress : undefined} galleryTitle={currentGallery?.title ?? (roumanReading ? `${roumanReading.bookTitle} · ${roumanReading.chapterTitle}` : undefined)} onBack={readerReturn ? returnFromReader : undefined} backLabel={readerReturn === 'catalog' ? '返回漫畫列表' : readerReturn === 'nhentai' ? '返回 Gallery' : readerReturn === 'account' ? '返回帳號頁' : readerReturn === 'rouman' ? '返回 Rouman5 章節' : '返回來源頁'}/>} 
     </main>
   </div>;
 }

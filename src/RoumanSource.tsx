@@ -16,7 +16,8 @@ type BookDetail = { id: string; title: string; coverUrl: string | null; descript
 type Mode = 'home' | 'new' | 'all' | 'ongoing' | 'completed' | 'search';
 type Order = 'site' | 'az' | 'za';
 type NhReading = { id: number; title: string; page: number; total: number; updatedAt: number };
-type Props = { onRead: (chapter: RoumanChapter) => void; active: boolean; nhHistory: NhReading[]; onOpenNh: (id: number) => void };
+type PageProgress = Record<string, { page: number; total: number; updatedAt: number }>;
+type Props = { onRead: (chapter: RoumanChapter) => void; active: boolean; nhHistory: NhReading[]; onOpenNh: (id: number) => void; pageProgress: PageProgress };
 const starter = 'https://rouman5.com/books/cmegn4syy019ved077i2841wl/0';
 const recentKey = 'mangahub-rouman-recent-v058';
 const favKey = 'mangahub-rouman-favorites-v059';
@@ -27,9 +28,11 @@ function saved<T>(key: string, fallback: T): T {
 }
 function chapterUrl(id: string, index: number) { return `https://rouman5.com/books/${id}/${index}`; }
 function chapterNumber(index: number) { return `第 ${index + 1} 話`; }
+function progressOf(c: RoumanChapter, records: PageProgress) { return records[`${c.bookId}:${c.chapterId || c.chapterIndex}`]; }
+function pageText(c: RoumanChapter, records: PageProgress) { const p = progressOf(c, records); return p ? `${c.chapterTitle} · 第 ${p.page} / ${p.total} 頁` : c.chapterTitle; }
 function displayTitle(title: string) { return title.trim() || '未命名作品'; }
 
-export default function RoumanSource({ onRead, active, nhHistory, onOpenNh }: Props) {
+export default function RoumanSource({ onRead, active, nhHistory, onOpenNh, pageProgress }: Props) {
   const [mode, setMode] = useState<Mode>('home');
   const [page, setPage] = useState(0);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
@@ -132,9 +135,9 @@ export default function RoumanSource({ onRead, active, nhHistory, onOpenNh }: Pr
   const tags = useMemo(() => [...new Set((catalog?.books ?? []).flatMap(x => x.tags ?? []))].sort((a,b) => a.localeCompare(b)), [catalog]);
   const showList = !detail && !chapter;
   const combinedHistory = useMemo(() => [
-    ...recent.map((r, index) => ({ key: 'rouman:' + r.url, source: 'Rouman5', name: r.bookTitle, detail: r.chapterTitle, at: r.visitedAt ?? (Date.now() - index), open: () => void startChapter(r.url) })),
+    ...recent.map((r, index) => ({ key: 'rouman:' + r.url, source: 'Rouman5', name: r.bookTitle, detail: pageText(r, pageProgress), at: r.visitedAt ?? (Date.now() - index), open: () => void startChapter(r.url) })),
     ...nhHistory.map(h => ({ key: 'nh:' + h.id, source: 'nHentai', name: h.title, detail: `${h.page}/${h.total} 頁`, at: h.updatedAt, open: () => onOpenNh(h.id) })),
-  ].sort((a,b) => b.at - a.at), [recent, nhHistory, onOpenNh]);
+  ].sort((a,b) => b.at - a.at), [recent, nhHistory, onOpenNh, pageProgress]);
   const isSaved = (id: string) => favorites.some(f => f.id === id);
   return <section className="content roumanPage roumanExplore">
     <div className="roumanHeading">
@@ -142,7 +145,7 @@ export default function RoumanSource({ onRead, active, nhHistory, onOpenNh }: Pr
         <h1>Rouman5 <span>探索漫畫</span></h1>
         <p className="lead">依公開目錄探索作品、查看章節與接續閱讀。漫畫內容由原站提供。</p></div>
       {recent.length > 0 && showList && <button className="roumanResume" disabled={busy} onClick={() => void startChapter(recent[0].url)}>
-        <Clock3 size={18}/><span><strong>接續上次閱讀</strong><small>{recent[0].bookTitle} · {recent[0].chapterTitle}</small></span><ChevronRight size={16}/>
+        <Clock3 size={18}/><span><strong>接續上次閱讀</strong><small>{recent[0].bookTitle} · {pageText(recent[0], pageProgress)}</small></span><ChevronRight size={16}/>
       </button>}
     </div>
     <form className="roumanGlobalSearch" onSubmit={e => {e.preventDefault(); void runSearch(globalTerm);}}>
@@ -194,7 +197,7 @@ export default function RoumanSource({ onRead, active, nhHistory, onOpenNh }: Pr
         <div className="roumanDetailBody"><h2>{displayTitle(detail.title)}</h2><p className="detailNote">{detail.description || '來源未提供作品介紹。'}</p>
           <div className="roumanDetailActions"><span><BookOpen size={15}/>{detail.chapters.length} 個章節</span>
             {activeCard && <button className="secondaryButton" onClick={() => changeFavorite(activeCard)}><Heart size={16} fill={isSaved(detail.id) ? 'currentColor' : 'none'}/>{isSaved(detail.id) ? '取消收藏' : '加入收藏'}</button>}
-            {activeRecent && <button className="primary" disabled={busy} onClick={() => void startChapter(activeRecent.url)}><Play size={16}/> 繼續閱讀 {chapterNumber(activeRecent.chapterIndex)}</button>}
+            {activeRecent && <button className="primary" disabled={busy} onClick={() => void startChapter(activeRecent.url)}><Play size={16}/> 繼續閱讀 {chapterNumber(activeRecent.chapterIndex)}{progressOf(activeRecent, pageProgress) ? ` · 第 ${progressOf(activeRecent, pageProgress)?.page} 頁` : ''}</button>}
             {!activeRecent && detail.chapters.length > 0 && <button className="primary" disabled={busy} onClick={() => void startChapter(detail.chapters[0].url)}><Play size={16}/> 開始閱讀</button>}
           </div></div>
       </div>
@@ -203,7 +206,7 @@ export default function RoumanSource({ onRead, active, nhHistory, onOpenNh }: Pr
         <div className="roumanChapterTools"><label className="roumanChapterSearch"><Search size={15}/><input value={chapterSearch} onChange={e => setChapterSearch(e.target.value)} placeholder="搜尋章節或話數" aria-label="搜尋章節"/></label>
           <button className="toggle" aria-label="切換章節排序" onClick={() => setChaptersDescending(v => !v)}>{chaptersDescending ? <ArrowDownAZ size={16}/> : <ArrowUpAZ size={16}/>} {chaptersDescending ? '新到舊' : '舊到新'}</button>
         </div></div>
-      <div className="roumanChapterGrid">{chapterLinks.map(link => <button className={activeRecent?.chapterIndex === link.index ? 'roumanChapterItem last' : 'roumanChapterItem'} key={link.index} disabled={busy} onClick={() => void startChapter(link.url)}><span>{link.name || chapterNumber(link.index)}</span>{activeRecent?.chapterIndex === link.index ? <small><Check size={13}/> 上次閱讀</small> : <ChevronRight size={16}/>}</button>)}</div>
+      <div className="roumanChapterGrid">{chapterLinks.map(link => <button className={activeRecent?.chapterIndex === link.index ? 'roumanChapterItem last' : 'roumanChapterItem'} key={link.index} disabled={busy} onClick={() => void startChapter(link.url)}><span>{link.name || chapterNumber(link.index)}</span>{activeRecent?.chapterIndex === link.index ? <small><Check size={13}/> {progressOf(activeRecent, pageProgress) ? `讀至第 ${progressOf(activeRecent, pageProgress)?.page} 頁` : '上次閱讀'}</small> : <ChevronRight size={16}/>}</button>)}</div>
       {chapterLinks.length === 0 && <div className="roumanEmpty">沒有符合的章節，請調整搜尋內容。</div>}
     </div>}
     {chapter && <div className="roumanResult"><div className="resultTop"><div><h3>{chapter.bookTitle}</h3><p>{chapter.chapterTitle} · {chapter.pageUrls.length} 張圖片</p></div>
@@ -212,6 +215,6 @@ export default function RoumanSource({ onRead, active, nhHistory, onOpenNh }: Pr
       <button className="secondaryButton" disabled={chapter.chapterIndex===0 || busy} onClick={() => void startChapter(chapterUrl(chapter.bookId, chapter.chapterIndex-1))}>上一話</button>
       <button className="secondaryButton" disabled={busy || (chapter.chapterCount > 0 && chapter.chapterIndex + 1 >= chapter.chapterCount)} onClick={() => void startChapter(chapterUrl(chapter.bookId, chapter.chapterIndex+1))}>下一話</button></div></div>}
     <details className="roumanManual"><summary>貼上章節網址（進階）</summary><form className="urlbox" onSubmit={e=>{e.preventDefault();void startChapter(input);}}><input value={input} onChange={e => setInput(e.target.value)} placeholder={starter}/><button disabled={busy}>解析並閱讀</button></form></details>
-    {recent.length>0 && <details className="roumanRecent"><summary>最近閱讀章節 ({recent.length})</summary><div className="chapterList">{recent.map(r=><button key={r.url} onClick={()=>void startChapter(r.url)}>{r.bookTitle} · {r.chapterTitle}<ChevronRight size={16}/></button>)}</div></details>}
+    {recent.length>0 && <details className="roumanRecent"><summary>最近閱讀章節 ({recent.length})</summary><div className="chapterList">{recent.map(r=><button key={r.url} onClick={()=>void startChapter(r.url)}>{r.bookTitle} · {pageText(r, pageProgress)}<ChevronRight size={16}/></button>)}</div></details>}
   </section>;
 }
