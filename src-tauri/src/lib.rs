@@ -950,6 +950,7 @@ struct RoumanBookCard {
     url: String,
     cover_url: Option<String>,
     section: String,
+    tags: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -969,6 +970,7 @@ struct RoumanBookDetails {
     cover_url: Option<String>,
     description: String,
     chapters: Vec<RoumanChapterLink>,
+    tags: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -1023,6 +1025,26 @@ fn rouman_cover(element: &scraper::ElementRef<'_>) -> Option<String> {
     Some(u.to_string())
 }
 
+// Only collect labels that are explicitly marked as taxonomy in public HTML.
+// Do not infer tags from manga names or arbitrary paragraph text.
+fn rouman_card_tags(el: &scraper::ElementRef<'_>) -> Vec<String> {
+    let mut labels = Vec::new();
+    if let Ok(sel) = Selector::parse("[data-tag], [data-category], a[href*='/tags/'], a[href*='/genres/']") {
+        for node in el.select(&sel) {
+            let val = node.value().attr("data-tag")
+                .or_else(|| node.value().attr("data-category"))
+                .map(str::to_string)
+                .unwrap_or_else(|| node.text().collect::<Vec<_>>().join(" "));
+            let label = val.trim();
+            if !label.is_empty() && label.chars().count() <= 40 && !labels.iter().any(|x| x == label) {
+                labels.push(label.to_owned());
+            }
+            if labels.len() >= 12 { break; }
+        }
+    }
+    labels
+}
+
 fn parse_rouman_catalog(html: &str, mode: &str, page: u32) -> RoumanCatalog {
     use scraper::ElementRef;
     use std::collections::HashSet;
@@ -1057,6 +1079,7 @@ fn parse_rouman_catalog(html: &str, mode: &str, page: u32) -> RoumanCatalog {
         books.push(RoumanBookCard {
             id: id.clone(), title, url: format!("https://rouman5.com/books/{id}"),
             cover_url: rouman_cover(&el), section: section.clone(),
+            tags: rouman_card_tags(&el),
         });
         if books.len() >= 180 { break; }
     }
@@ -1081,6 +1104,20 @@ async fn browse_rouman_catalog(mode: String, page: u32) -> Result<RoumanCatalog,
     let result = parse_rouman_catalog(&html, &mode, page);
     if result.books.is_empty() { return Err("目錄未取得作品卡片，可能是網站 HTML 已變更".into()); }
     Ok(result)
+}
+
+// Verified public search URL from the human-facing Rouman5 search page.
+// Terms are inserted as URL query parameters; no private API is called.
+#[command]
+async fn search_rouman_catalog(term: String, page: u32) -> Result<RoumanCatalog, String> {
+    let term = term.trim();
+    if term.chars().count() < 1 || term.chars().count() > 100 { return Err("請輸入 1～100 字的搜尋關鍵字".into()); }
+    if page > 100 { return Err("搜尋頁碼超出限制".into()); }
+    let mut url = Url::parse("https://rouman5.com/search").unwrap();
+    url.query_pairs_mut().append_pair("page", &page.to_string()).append_pair("term", term);
+    let html = rouman_html(url).await?;
+    // An empty list is valid (no results).
+    Ok(parse_rouman_catalog(&html, "search", page))
 }
 
 #[command]
@@ -1130,13 +1167,45 @@ async fn inspect_rouman_book(book_id: String) -> Result<RoumanBookDetails, Strin
     }
     chapters.sort_by_key(|ch| ch.index);
     if chapters.is_empty() { return Err("作品頁未找到章節連結，請確認作品是否可公開閱讀".into()); }
-    Ok(RoumanBookDetails { id: book_id, title, cover_url, description, chapters })
+    let mut tags = Vec::<String>::new();
+    if let Ok(sel) = Selector::parse("[data-tag], [data-category], a[href*='/tags/'], a[href*='/genres/']") {
+        for node in doc.select(&sel) {
+            let val = node.value().attr("data-tag").or_else(|| node.value().attr("data-category"))
+                .map(str::to_owned).unwrap_or_else(|| node.text().collect::<Vec<_>>().join(" "));
+            let label = val.trim();
+            if !label.is_empty() && label.chars().count() <= 40 && !tags.iter().any(|x| x == label) { tags.push(label.into()); }
+            if tags.len() >= 24 { break; }
+        }
+    }
+    Ok(RoumanBookDetails { id: book_id, title, cover_url, description, chapters, tags })
 }
 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![browse_rouman_catalog, inspect_rouman_book, inspect_rouman_chapter, inspect_comicbox_chapter, probe_comicbox_image, probe_comicbox_pair, fetch_nh_gallery, browse_nh_catalog, list_nh_taxonomy, random_nh_gallery, related_nh_galleries, nh_connect, nh_disconnect, nh_session, nh_account_favorites, nh_account_blacklist, nh_account_random_favorite, nh_toggle_remote_favorite, nh_gallery_comments])
+        .invoke_handler(tauri::generate_handler![search_rouman_catalog, browse_rouman_catalog, inspect_rouman_book, inspect_rouman_chapter, inspect_comicbox_chapter, probe_comicbox_image, probe_comicbox_pair, fetch_nh_gallery, browse_nh_catalog, list_nh_taxonomy, random_nh_gallery, related_nh_galleries, nh_connect, nh_disconnect, nh_session, nh_account_favorites, nh_account_blacklist, nh_account_random_favorite, nh_toggle_remote_favorite, nh_gallery_comments])
         .run(tauri::generate_context!())
         .expect("error while running MangaHub");
+}
+
+#[cfg(test)]
+mod rouman_search_tests {
+    use super::*;
+
+    #[test]
+    fn parses_public_search_cards_without_guessing_image_paths() {
+        let html = r#"<main><a href='/books/cmegn4syy019ved077i2841wl'>
+          <img alt='神聖陷阱' src='https://cdn.example.org/cover.jpg' />
+          <span data-tag='韓國'>韓國</span></a><a href='/books/cmegn4syy019ved077i2841wl'>duplicate</a></main>"#;
+        let list = parse_rouman_catalog(html, "search", 0);
+        assert_eq!(list.books.len(), 1);
+        assert_eq!(list.books[0].title, "神聖陷阱");
+        assert_eq!(list.books[0].tags, vec!["韓國"]);
+    }
+
+    #[test]
+    fn empty_search_is_valid() {
+        let list = parse_rouman_catalog("<main><p>沒有結果</p></main>", "search", 0);
+        assert!(list.books.is_empty());
+    }
 }

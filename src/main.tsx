@@ -77,7 +77,7 @@ function App() {
     readDirectImages(chapter.pageUrls, 'rouman');
     setRoumanReading(chapter);
   }
-  function readNhGallery(gallery: GalleryDetail, origin: 'catalog'|'account' = 'catalog') {
+  function readNhGallery(gallery: GalleryDetail, origin: 'catalog'|'account'|'rouman' = 'catalog') {
     setNhHistory(prev => {
       const existing = prev.find(r => r.id === gallery.id);
       const record: ReadingRecord = { id: gallery.id, title: gallery.title, coverUrl: gallery.coverUrl ?? existing?.coverUrl ?? null, page: existing?.page ?? 1, total: gallery.pageUrls.length, updatedAt: Date.now() };
@@ -111,6 +111,12 @@ function App() {
       const gallery=await invoke<GalleryDetail>('fetch_nh_gallery',{input:String(id)});
       readNhGallery(gallery,'account');
     } catch(e) {window.alert('無法開啟作品：'+String(e));}
+  }
+  async function openRoumanNhGallery(id: number) {
+    try {
+      const gallery = await invoke<GalleryDetail>('fetch_nh_gallery', { input: String(id) });
+      readNhGallery(gallery, 'rouman');
+    } catch(e) { window.alert('無法開啟作品：' + String(e)); }
   }
   function openAccountComments(id:number) {setAccountGalleryId(id);setTab('account');window.scrollTo(0,0);}
   function recordNhProgress(page: number) {
@@ -231,7 +237,7 @@ function App() {
       <div className={tab === 'capabilities' ? 'sourceView' : 'sourceView is-hidden'}><SourceCapabilities onRead={urls => readDirectImages(urls, 'capabilities')}/></div>
       <div className={tab === 'nhentai' ? 'sourceView' : 'sourceView is-hidden'}><NhentaiSource onRead={urls => readDirectImages(urls, 'nhentai')}/></div>
       <div className={tab === 'catalog' ? 'catalogView' : 'catalogView is-hidden'}><NhCatalog adultConfirmed={adultConfirmed} showCovers={showCovers} onAdultChange={setAdultConfirmed} onCoversChange={setShowCovers} favorites={nhFavorites} onToggleFavorite={toggleNhFavorite} history={nhHistory} onClearHistory={() => setNhHistory([])} onReadGallery={readNhGallery} onRepairHistoryCover={repairHistoryCover} blockedTags={blockedTags} onOpenComments={openAccountComments}/></div>
-      <div className={tab === 'rouman' ? 'sourceView' : 'sourceView is-hidden'}><RoumanSource active={tab === 'rouman'} onRead={readRoumanChapter}/></div>
+      <div className={tab === 'rouman' ? 'sourceView' : 'sourceView is-hidden'}><RoumanSource active={tab === 'rouman'} onRead={readRoumanChapter} nhHistory={nhHistory} onOpenNh={openRoumanNhGallery}/></div>
       {tab === 'account' && <NhAccount onSyncFavorites={syncOfficialFavorites} onRemoteFavorite={handleRemoteFavorite} onOpenGallery={id=>void openAccountGallery(id)} onBlacklistUpdated={applyBlockedTags} selectedGalleryId={accountGalleryId}/>}
       {tab === 'diagnostics' && <SourceDiagnostics/>}
       {tab === 'reader' && <Reader key={readerSession} initialUrls={readerUrls} onProgress={currentGallery ? recordNhProgress : undefined} galleryTitle={currentGallery?.title ?? (roumanReading ? `${roumanReading.bookTitle} · ${roumanReading.chapterTitle}` : undefined)} onBack={readerReturn ? returnFromReader : undefined} backLabel={readerReturn === 'catalog' ? '返回漫畫列表' : readerReturn === 'nhentai' ? '返回 Gallery' : readerReturn === 'account' ? '返回帳號頁' : readerReturn === 'rouman' ? '返回 Rouman5 章節' : '返回來源頁'}/>} 
