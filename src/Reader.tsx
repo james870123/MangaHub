@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, ArrowLeft, ChevronLeft, ChevronRight, ImagePlus, RotateCcw, Trash2, ZoomOut } from 'lucide-react';
-import { drawRoumanImage, needsRoumanStripRepair } from './roumanStripRepair';
+import { drawRoumanImage, isRoumanCdnImage, needsRoumanStripRepair } from './roumanStripRepair';
 import { invoke } from '@tauri-apps/api/core';
 
 type ReadingMode = 'vertical' | 'ltr' | 'rtl';
@@ -12,7 +12,7 @@ const STORAGE_PROGRESS = 'mh-v03-reading-progress';
 const STORAGE_CACHE_LIMIT = 'mh-v064-image-cache-limit';
 type CacheStats = { bytes: number; files: number; roumanBytes: number; nhentaiBytes: number };
 const mb = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-const cacheSupported = (url: string) => { try { const u = new URL(url); return u.protocol === 'https:' && ((/^v[1-4]\.towm85\.xyz$/.test(u.hostname) && u.pathname.startsWith('/m/')) || (u.hostname === 'i.nhentai.net' && u.pathname.startsWith('/galleries/'))); } catch { return false; } };
+const cacheSupported = (url: string) => { try { const u = new URL(url); return isRoumanCdnImage(url) || (u.protocol === 'https:' && u.hostname === 'i.nhentai.net' && u.pathname.startsWith('/galleries/') && !u.username && !u.password && !u.port); } catch { return false; } };
 const safeRead = (key: string, fallback: string) => { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } };
 const isSupportedHttps = (s: string) => {
   try { const url = new URL(s); return url.protocol === 'https:' && !url.username && !url.password; }

@@ -5,11 +5,25 @@
  * an ordinary, accessible JPEG. It never fetches or derives protected URLs.
  */
 
-export function needsRoumanStripRepair(value: string): boolean {
+/**
+ * Keep the reader and disk cache on the same *host family* rules as the Rust
+ * validate_rouman_image_source() allowlist (v0.6.6 CDN rotation fix).
+ * Only exact numbered v1-v999 nodes are accepted; never arbitrary subdomains.
+ */
+export function isRoumanCdnImage(value: string): boolean {
   try {
     const u = new URL(value);
-    return u.protocol === 'https:' && /^v[1-4]\.towm85\.xyz$/.test(u.hostname) &&
-      u.pathname.startsWith('/m/') && u.pathname.split('/').includes('sr:1');
+    if (u.protocol !== 'https:' || u.username || u.password || u.port || !u.pathname.startsWith('/m/')) return false;
+    const host = u.hostname.toLowerCase();
+    return host === 'kelv47.xyz' || /^v[1-9][0-9]{0,2}\.(kelv47|towm85)\.xyz$/.test(host);
+  } catch { return false; }
+}
+
+export function needsRoumanStripRepair(value: string): boolean {
+  if (!isRoumanCdnImage(value)) return false;
+  try {
+    // The site marks permuted JPEGs by a path component, not by the CDN host.
+    return new URL(value).pathname.split('/').includes('sr:1');
   } catch { return false; }
 }
 
