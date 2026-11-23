@@ -957,9 +957,6 @@ async fn nh_gallery_comments(gallery_id:u64, page:u32) -> Result<Value,String> {
     }
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-
-
 // Rouman5 chapter inspection. Reads only published chapter HTML and returns
 // source-provided JPEG URLs. No hidden API calls, cookies, or challenge bypass.
 #[derive(Serialize)]
@@ -1400,6 +1397,7 @@ async fn inspect_rouman_book(book_id: String) -> Result<RoumanBookDetails, Strin
     Ok(RoumanBookDetails { id: book_id, title, cover_url, description, chapters, tags })
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
