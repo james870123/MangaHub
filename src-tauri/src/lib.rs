@@ -51,9 +51,21 @@ fn validate_rouman_image_source(u: &Url) -> Result<(), &'static str> {
     if u.port().is_some() || !u.username().is_empty() || u.password().is_some() {
         return Err("包含自訂連接埠或帳號資訊");
     }
-    if !matches!(u.host_str().unwrap_or(""),
-        "v1.towm85.xyz" | "v2.towm85.xyz" | "v3.towm85.xyz" | "v4.towm85.xyz"
-        | "v1.kelv47.xyz" | "kelv47.xyz") {
+    // These two CDN families have been observed in Rouman5 chapter imagePaths.
+    // Allow numbered CDN nodes (v1, v2, ...), not arbitrary subdomains or
+    // unrelated hosts. This covers load-balancing without disabling SSRF checks.
+    let host = u.host_str().unwrap_or("");
+    let numbered_node = |root: &str| -> bool {
+        let Some(prefix) = host.strip_suffix(root) else { return false; };
+        let Some(number) = prefix.strip_prefix("v") else { return false; };
+        !number.is_empty()
+            && number.len() <= 3
+            && number.as_bytes()[0] != b'0'
+            && number.bytes().all(|b| b.is_ascii_digit())
+    };
+    if host != "kelv47.xyz"
+        && !numbered_node(".kelv47.xyz")
+        && !numbered_node(".towm85.xyz") {
         return Err("圖片主機不在已驗證的 CDN 清單");
     }
     if !u.path().starts_with("/m/") { return Err("圖片路徑不是 /m/ 開頭"); }
@@ -204,6 +216,12 @@ mod image_cache_tests {
     fn allowed_image_urls_only() {
         assert!(image_cache_url("https://v1.towm85.xyz/m/sample.jpg").is_ok());
         assert!(image_cache_url("https://v1.kelv47.xyz/m/sample.jpg?sr=1").is_ok());
+        assert!(image_cache_url("https://v2.kelv47.xyz/m/sample.jpg?sr=1").is_ok());
+        assert!(image_cache_url("https://v16.kelv47.xyz/m/sample.jpg").is_ok());
+        assert!(image_cache_url("https://v7.towm85.xyz/m/sample.jpg").is_ok());
+        assert!(image_cache_url("https://foo.kelv47.xyz/m/sample.jpg").is_err());
+        assert!(image_cache_url("https://v0.kelv47.xyz/m/sample.jpg").is_err());
+        assert!(image_cache_url("https://v9999.kelv47.xyz/m/sample.jpg").is_err());
         assert!(image_cache_url("https://kelv47.xyz/m/sample.jpg").is_ok());
         assert!(image_cache_url("https://v1.kelv47.xyz.evil.test/m/1.jpg").is_err());
         assert!(image_cache_url("http://v1.kelv47.xyz/m/1.jpg").is_err());
@@ -1110,19 +1128,31 @@ async fn inspect_rouman_chapter(url: String) -> Result<RoumanChapter, String> {
 mod rouman_tests {
     use super::*;
     #[test]
-    fn rejects_new_cdn_with_actionable_and_non_sensitive_error() {
+    fn rejects_untrusted_cdn_with_actionable_and_non_sensitive_error() {
         let target = Url::parse("https://rouman5.com/books/47376792-2816-4ccf-a146-957b8d6a2ac6/0").unwrap();
-        let html = r#"imagePaths:$R[3]=["https://v1.towm85.xyz/m/1.jpg", "https://v5.towm85.xyz/m/2.jpg?token=secret-value"]"#;
+        let html = r#"imagePaths:$R[3]=["https://v1.kelv47.xyz/m/1.jpg", "https://v2.kelv47.xyz.evil.test/m/2.jpg?token=secret-value"]"#;
         let error = parse_rouman_html(html, &target).err().expect("expected a rejected CDN");
         assert!(error.contains("第 2 張"));
-        assert!(error.contains("v5.towm85.xyz"));
+        assert!(error.contains("v2.kelv47.xyz.evil.test"));
         assert!(error.contains("CDN"));
         assert!(!error.contains("secret-value"));
+    }
+    #[test]
+    fn accepts_rotating_numbered_rouman_cdn_nodes() {
+        let target = Url::parse("https://rouman5.com/books/47376792-2816-4ccf-a146-957b8d6a2ac6/0").unwrap();
+        let html = r#"imagePaths:$R[3]=["https://v1.kelv47.xyz/m/1.jpg?sr=1", "https://v2.kelv47.xyz/m/2.jpg?sr=0", "https://v7.towm85.xyz/m/3.jpg"]"#;
+        let parsed = parse_rouman_html(html, &target).unwrap();
+        assert_eq!(parsed.page_urls.len(), 3);
     }
     #[test]
     fn shared_cdn_validation_rejects_untrusted_paths_and_hosts() {
         assert!(validate_rouman_image_source(&Url::parse("https://v2.towm85.xyz/m/1.jpg?sr=1").unwrap()).is_ok());
         assert!(validate_rouman_image_source(&Url::parse("https://v1.kelv47.xyz/m/1.jpg?sr=1").unwrap()).is_ok());
+        assert!(validate_rouman_image_source(&Url::parse("https://v2.kelv47.xyz/m/2.jpg?sr=1").unwrap()).is_ok());
+        assert!(validate_rouman_image_source(&Url::parse("https://v12.kelv47.xyz/m/2.jpg").unwrap()).is_ok());
+        assert!(validate_rouman_image_source(&Url::parse("https://v5.towm85.xyz/m/1.jpg").unwrap()).is_ok());
+        assert!(validate_rouman_image_source(&Url::parse("https://cdn.kelv47.xyz/m/1.jpg").unwrap()).is_err());
+        assert!(validate_rouman_image_source(&Url::parse("https://v0.kelv47.xyz/m/1.jpg").unwrap()).is_err());
         assert!(validate_rouman_image_source(&Url::parse("https://v1.kelv47.xyz.evil.test/m/1.jpg").unwrap()).is_err());
         assert!(validate_rouman_image_source(&Url::parse("https://v2.towm85.xyz.evil.test/m/1.jpg").unwrap()).is_err());
         assert!(validate_rouman_image_source(&Url::parse("https://v2.towm85.xyz/other/1.jpg").unwrap()).is_err());
