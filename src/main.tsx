@@ -1,259 +1,133 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { invoke } from '@tauri-apps/api/core';
-import { openUrl } from '@tauri-apps/plugin-opener';
-import { BookOpen, Bookmark, ExternalLink, RefreshCw, ChevronLeft, ChevronRight, CircleHelp, Globe2, Image, Library, Link, LoaderCircle, Plus, Search, Trash2, PanelLeftClose, PanelLeftOpen, UserRound } from 'lucide-react';
+import { BookOpen, Library, PanelLeftClose, PanelLeftOpen, Search, UserRound } from 'lucide-react';
 import './style.css';
 import Reader from './Reader';
 import RoumanSource, { type RoumanChapter } from './RoumanSource';
-import SourceDiagnostics from './SourceDiagnostics';
-import NhentaiSource from './NhentaiSource';
 import NhCatalog, { type CatalogItem, type GalleryDetail, type ReadingRecord } from './NhCatalog';
-import NhAccount, {type AccountItem} from './NhAccount';
-import SourceCapabilities from './SourceCapabilityPanel';
-import { sourceForUrl } from './sourceCapabilities';
+import NhAccount, { type AccountItem } from './NhAccount';
+import UnifiedShelf from './UnifiedShelf';
 
-type Chapter = { id: string; title: string; url: string };
-type ChapterInfo = { title: string; url: string; chapterId: string; pages: number; chapters: Chapter[]; encryptedImagePipeline: boolean };
-type CachedChapter = { info: ChapterInfo; cachedAt: number };
-type Book = { url: string; title: string; pages: number; chapterId: string; savedAt: number };
-function useSaved<T>(key: string, initial: T): [T, React.Dispatch<React.SetStateAction<T>>] {
-  const [state, setState] = useState<T>(() => { try { const value = localStorage.getItem(key); return value ? JSON.parse(value) as T : initial; } catch { return initial; } });
-  useEffect(() => { localStorage.setItem(key, JSON.stringify(state)); }, [key, state]);
-  return [state, setState];
+function useSaved<T>(key:string,initial:T):[T,React.Dispatch<React.SetStateAction<T>>]{
+  const [value,setValue]=useState<T>(()=>{try {const raw=localStorage.getItem(key);return raw?JSON.parse(raw) as T:initial;}catch{return initial;}});
+  useEffect(()=>{localStorage.setItem(key,JSON.stringify(value));},[key,value]);
+  return [value,setValue];
 }
-const example = 'https://www.comicbox.xyz/free-chapter/42682?t=20260415';
-function App() {
-  const [tab, setTab] = useState<'source' | 'library' | 'reader' | 'chapter' | 'diagnostics' | 'capabilities' | 'nhentai' | 'catalog' | 'account' | 'rouman'>('catalog');
-  const [url, setUrl] = useState(example);
-  const [sidebarCollapsed, setSidebarCollapsed] = useSaved('mh-ui-sidebar-collapsed', false);
-  const readerOrigin = useRef<'catalog' | 'nhentai' | 'capabilities' | 'account' | 'rouman' | null>(null);
-  const catalogScroll = useRef(0);
-  const originScroll = useRef(0);
-  const [readerReturn, setReaderReturn] = useState<'catalog' | 'nhentai' | 'capabilities' | 'account' | 'rouman' | null>(null);
-  function openTab(next: typeof tab) {
-    if (next === 'catalog' && tab !== 'reader') window.scrollTo(0, catalogScroll.current);
-    setTab(next);
-  }
-  function returnFromReader() {
-    const target = readerOrigin.current;
-    readerOrigin.current = null;
-    setReaderReturn(null);
-    setTab(target ?? 'catalog');
-    if (target) {
-      const y = target === 'catalog' ? catalogScroll.current : originScroll.current;
-      requestAnimationFrame(() => requestAnimationFrame(() => window.scrollTo({ top: y, behavior: 'instant' })));
-    } else window.scrollTo(0, 0);
-  }
-  useEffect(() => {
-    if (tab !== 'reader' || !readerReturn) return;
-    const onBack = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' || (event.altKey && event.key === 'ArrowLeft')) {
-        const active = document.activeElement;
-        if (active && ['INPUT','TEXTAREA','SELECT'].includes(active.tagName)) return;
-        event.preventDefault(); returnFromReader();
-      }
-    };
-    window.addEventListener('keydown', onBack);
-    return () => window.removeEventListener('keydown', onBack);
-  }, [tab, readerReturn]);
-  const [readerUrls, setReaderUrls] = useState<string[] | undefined>();
-  const [readerSession, setReaderSession] = useState(0);
-  const [adultConfirmed, setAdultConfirmed] = useSaved('mh-v05-adult-confirmed', false);
-  const [showCovers, setShowCovers] = useSaved('mh-v05-show-covers', false);
-  const [nhFavorites, setNhFavorites] = useSaved<CatalogItem[]>('mh-v05-nh-favorites', []);
-  const [nhHistory, setNhHistory] = useSaved<ReadingRecord[]>('mh-v05-nh-history', []);
-  const [blockedTags, setBlockedTags] = useState<string[]>(()=>{
-    try {const value=JSON.parse(localStorage.getItem('mh-v055-local-blacklist')||'[]') as unknown;
-      return Array.isArray(value)?value.filter((x):x is string=>typeof x==='string'):[];
-    } catch{return [] as string[];}
+type Tab='catalog'|'rouman'|'library'|'account'|'reader';
+type RoumanProgress={page:number;total:number;updatedAt:number};
+function App(){
+  const [tab,setTab]=useState<Tab>('catalog');
+  const [sidebarCollapsed,setSidebarCollapsed]=useSaved('mh-ui-sidebar-collapsed',false);
+  const [adultConfirmed,setAdultConfirmed]=useSaved('mh-v05-adult-confirmed',false);
+  const [showCovers,setShowCovers]=useSaved('mh-v05-show-covers',false);
+  const [nhFavorites,setNhFavorites]=useSaved<CatalogItem[]>('mh-v05-nh-favorites',[]);
+  const [nhHistory,setNhHistory]=useSaved<ReadingRecord[]>('mh-v05-nh-history',[]);
+  const [roumanPages,setRoumanPages]=useSaved<Record<string,RoumanProgress>>('mangahub-rouman-page-progress-v062',{});
+  const [blockedTags,setBlockedTags]=useState<string[]>(()=>{
+    try{const data:unknown=JSON.parse(localStorage.getItem('mh-v055-local-blacklist')||'[]');return Array.isArray(data)?data.filter((x):x is string=>typeof x==='string'):[];}
+    catch{return [];}
   });
-  const applyBlockedTags = useCallback((names:string[])=>setBlockedTags(names),[]);
   const [accountGalleryId,setAccountGalleryId]=useState<number|null>(null);
-  type RoumanPageRecord = { page: number; total: number; updatedAt: number };
-  const [roumanPages, setRoumanPages] = useSaved<Record<string, RoumanPageRecord>>('mangahub-rouman-page-progress-v062', {});
-  const roumanPageKey = (chapter: RoumanChapter) => `${chapter.bookId}:${chapter.chapterId || chapter.chapterIndex}`;
-  const [roumanReading, setRoumanReading] = useState<RoumanChapter | null>(null);
-  const [currentGallery, setCurrentGallery] = useState<GalleryDetail | null>(null);
-  const toggleNhFavorite = (item: CatalogItem) => setNhFavorites(prev => prev.some(x => x.id === item.id) ? prev.filter(x => x.id !== item.id) : [item, ...prev].slice(0, 500));
-  function readRoumanChapter(chapter: RoumanChapter) {
-    readDirectImages(chapter.pageUrls, 'rouman');
-    setRoumanReading(chapter);
+  const [readerUrls,setReaderUrls]=useState<string[]>([]);
+  const [readerSession,setReaderSession]=useState(0);
+  const [readerOrigin,setReaderOrigin]=useState<'catalog'|'rouman'|'account'|'library'|null>(null);
+  const [currentGallery,setCurrentGallery]=useState<GalleryDetail|null>(null);
+  const [roumanReading,setRoumanReading]=useState<RoumanChapter|null>(null);
+  const catalogScroll=useRef(0);
+  const originScroll=useRef(0);
+  const roumanPageKey=(c:RoumanChapter)=>`${c.bookId}:${c.chapterId||c.chapterIndex}`;
+  function showTab(next:Tab){if(next==='catalog'&&tab!=='reader')requestAnimationFrame(()=>window.scrollTo(0,catalogScroll.current));setTab(next);}
+  function readImages(urls:string[],origin:'catalog'|'rouman'|'account'|'library'){
+    originScroll.current=window.scrollY;
+    if(origin==='catalog')catalogScroll.current=window.scrollY;
+    setReaderOrigin(origin);setReaderUrls(urls);setReaderSession(v=>v+1);setTab('reader');window.scrollTo(0,0);
   }
-  function readNhGallery(gallery: GalleryDetail, origin: 'catalog'|'account'|'rouman' = 'catalog') {
-    setNhHistory(prev => {
-      const existing = prev.find(r => r.id === gallery.id);
-      const record: ReadingRecord = { id: gallery.id, title: gallery.title, coverUrl: gallery.coverUrl ?? existing?.coverUrl ?? null, page: existing?.page ?? 1, total: gallery.pageUrls.length, updatedAt: Date.now() };
-      return [record, ...prev.filter(r => r.id !== gallery.id)].slice(0, 200);
-    });
-    readDirectImages(gallery.pageUrls, origin);
-    setCurrentGallery(gallery);
+  function readRoumanChapter(c:RoumanChapter,origin:'rouman'|'library'='rouman'){
+    setCurrentGallery(null);setRoumanReading(c);readImages(c.pageUrls,origin);
   }
-  function repairHistoryCover(id: number, coverUrl: string) {
-    setNhHistory(prev => prev.map(record => record.id === id && record.coverUrl !== coverUrl
-      ? { ...record, coverUrl } : record));
-    setNhFavorites(prev => prev.map(item => item.id === id && item.coverUrl !== coverUrl
-      ? { ...item, coverUrl } : item));
+  function readNhGallery(g:GalleryDetail,origin:'catalog'|'account'|'rouman'|'library'='catalog'){
+    setNhHistory(prev=>{const old=prev.find(r=>r.id===g.id);
+      const r:ReadingRecord={id:g.id,title:g.title,coverUrl:g.coverUrl??old?.coverUrl??null,
+        page:old?.page??1,total:g.pageUrls.length,updatedAt:Date.now()};
+      return[r,...prev.filter(x=>x.id!==g.id)].slice(0,200);});
+    setRoumanReading(null);setCurrentGallery(g);readImages(g.pageUrls,origin);
   }
-  function syncOfficialFavorites(items: AccountItem[]) {
-    setNhFavorites(prev => {
-      const merged = new Map<number,CatalogItem>();
-      for(const item of prev) merged.set(item.id,item);
-      for(const item of items) merged.set(item.id, {id:item.id,title:item.title,coverUrl:item.coverUrl,pageCount:item.pageCount,tags:item.tags});
-      return [...merged.values()].slice(0,2000);
-    });
+  async function openNhId(id:number,origin:'rouman'|'account'|'library'){
+    try{const g=await invoke<GalleryDetail>('fetch_nh_gallery',{input:String(id)});readNhGallery(g,origin);}
+    catch(e){window.alert('無法載入作品：'+String(e));}
   }
-  function handleRemoteFavorite(id:number,add:boolean) {
-    if(!add)setNhFavorites(prev=>prev.filter(x=>x.id!==id));
-    else void invoke<GalleryDetail>('fetch_nh_gallery',{input:String(id)}).then(g=>{
-      setNhFavorites(prev=>prev.some(x=>x.id===id)?prev:[{id,title:g.title,coverUrl:g.coverUrl??null,pageCount:g.pageUrls.length,tags:g.tags??[]},...prev]);
-    }).catch(()=>{});
+  async function openRoumanUrl(url:string){
+    try{const c=await invoke<RoumanChapter>('inspect_rouman_chapter',{url});readRoumanChapter(c,'library');}
+    catch(e){window.alert('無法載入 Rouman5 章節：'+String(e));}
   }
-  async function openAccountGallery(id:number) {
-    try {
-      const gallery=await invoke<GalleryDetail>('fetch_nh_gallery',{input:String(id)});
-      readNhGallery(gallery,'account');
-    } catch(e) {window.alert('無法開啟作品：'+String(e));}
+  function openRoumanBook(id:string){
+    setTab('rouman');
+    window.dispatchEvent(new CustomEvent('mangahub-open-rouman-book',{detail:id}));
   }
-  async function openRoumanNhGallery(id: number) {
-    try {
-      const gallery = await invoke<GalleryDetail>('fetch_nh_gallery', { input: String(id) });
-      readNhGallery(gallery, 'rouman');
-    } catch(e) { window.alert('無法開啟作品：' + String(e)); }
+  function removeRoumanFavorite(id:string){
+    try{
+      const key='mangahub-rouman-favorites-v059';
+      const items=JSON.parse(localStorage.getItem(key)||'[]') as {id:string}[];
+      const next=items.filter(x=>x.id!==id);
+      localStorage.setItem(key,JSON.stringify(next));
+      window.dispatchEvent(new CustomEvent('mangahub-rouman-favorites-updated',{detail:next}));
+      // Remount the shelf to refresh its own read-only snapshot.
+      setShelfRevision(x=>x+1);
+    }catch(e){window.alert('無法更新收藏：'+String(e));}
   }
-  function openAccountComments(id:number) {setAccountGalleryId(id);setTab('account');window.scrollTo(0,0);}
-  function recordRoumanProgress(page: number) {
-    if (!roumanReading) return;
-    const key = roumanPageKey(roumanReading);
-    const total = roumanReading.pageUrls.length;
-    const validPage = Math.max(1, Math.min(page, total));
-    setRoumanPages(prev => {
-      if (prev[key]?.page === validPage && prev[key]?.total === total) return prev;
-      return { ...prev, [key]: { page: validPage, total, updatedAt: Date.now() } };
-    });
+  const [shelfRevision,setShelfRevision]=useState(0);
+  function returnFromReader(){
+    const dest=readerOrigin??'catalog';setReaderOrigin(null);setTab(dest);
+    const y=dest==='catalog'?catalogScroll.current:originScroll.current;
+    requestAnimationFrame(()=>requestAnimationFrame(()=>window.scrollTo({top:y,behavior:'instant'})));
   }
-  function recordNhProgress(page: number) {
-    if (!currentGallery) return;
-    setNhHistory(prev => prev.map(r => r.id === currentGallery.id && r.page !== page ? { ...r, page, updatedAt: Date.now() } : r));
+  useEffect(()=>{if(tab!=='reader'||!readerOrigin)return;
+    const handler=(e:KeyboardEvent)=>{if(e.key==='Escape'||(e.altKey&&e.key==='ArrowLeft')){
+      if(document.activeElement&&['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName))return;
+      e.preventDefault();returnFromReader();}};
+    window.addEventListener('keydown',handler);return()=>window.removeEventListener('keydown',handler);
+  },[tab,readerOrigin]);
+  const toggleNhFavorite=(item:CatalogItem)=>setNhFavorites(prev=>prev.some(x=>x.id===item.id)?prev.filter(x=>x.id!==item.id):[item,...prev].slice(0,500));
+  const repairHistoryCover=(id:number,coverUrl:string)=>{
+    setNhHistory(prev=>prev.map(x=>x.id===id&&x.coverUrl!==coverUrl?{...x,coverUrl}:x));
+    setNhFavorites(prev=>prev.map(x=>x.id===id&&x.coverUrl!==coverUrl?{...x,coverUrl}:x));
+  };
+  function syncOfficialFavorites(items:AccountItem[]){setNhFavorites(prev=>{
+    const merged=new Map<number,CatalogItem>();for(const item of prev)merged.set(item.id,item);
+    for(const item of items)merged.set(item.id,{id:item.id,title:item.title,coverUrl:item.coverUrl,pageCount:item.pageCount,tags:item.tags});
+    return[...merged.values()].slice(0,2000);
+  });}
+  function handleRemoteFavorite(id:number,add:boolean){
+    if(!add){setNhFavorites(p=>p.filter(x=>x.id!==id));return;}
+    void invoke<GalleryDetail>('fetch_nh_gallery',{input:String(id)}).then(g=>setNhFavorites(p=>p.some(x=>x.id===id)?p:[{id,title:g.title,coverUrl:g.coverUrl??null,pageCount:g.pageUrls.length,tags:g.tags??[]},...p])).catch(()=>{});
   }
-  function readDirectImages(urls: string[], origin: 'catalog' | 'nhentai' | 'capabilities' | 'account' | 'rouman' | null = null) {
-    originScroll.current = window.scrollY;
-    if (origin === 'catalog') catalogScroll.current = window.scrollY;
-    readerOrigin.current = origin;
-    setReaderReturn(origin);
-    setCurrentGallery(null);
-    setRoumanReading(null);
-    setReaderUrls(urls);
-    setReaderSession(n => n + 1);
-    setTab('reader');
-    window.scrollTo(0, 0);
-  }
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [info, setInfo] = useState<ChapterInfo | null>(null);
-  const [active, setActive] = useState<Chapter | null>(null);
-  const [chapterError, setChapterError] = useState('');
-  const [chapterLoading, setChapterLoading] = useState(false);
-  const [cache, setCache] = useSaved<Record<string, CachedChapter>>('mh-chapter-cache-v02', {});
-  const [books, setBooks] = useSaved<Book[]>('mh-books', []);
-  function chapterKey(input: string) {
-    try {
-      const parsed = new URL(input);
-      const match = parsed.pathname.match(/^\/free-chapter\/(\d+)$/);
-      return parsed.protocol === 'https:' && parsed.hostname === 'www.comicbox.xyz' ? (match?.[1] ?? '') : '';
-    } catch { return ''; }
-  }
-  async function inspect(input: string, force = false) {
-    setLoading(true); setError(''); setTab('source');
-    try {
-      const key = chapterKey(input);
-      const saved = !force && key ? cache[key] : undefined;
-      const data = saved?.info ?? await invoke<ChapterInfo>('inspect_comicbox_chapter', { url: input });
-      setInfo(data); setUrl(data.url);
-      if (!saved) setCache(prev => ({ ...prev, [data.chapterId]: { info: data, cachedAt: Date.now() } }));
-    } catch (e) {
-      setError(String(e)); // preserve the previously parsed index when a later request is blocked
-    } finally { setLoading(false); }
-  }
-  async function openChapter(chapter: Chapter, force = false) {
-    setActive(chapter); setChapterError(''); setTab('chapter');
-    const key = chapterKey(chapter.url);
-    if (!force && cache[key]) return;
-    setChapterLoading(true);
-    try {
-      const data = await invoke<ChapterInfo>('inspect_comicbox_chapter', { url: chapter.url });
-      setCache(prev => ({ ...prev, [data.chapterId]: { info: data, cachedAt: Date.now() } }));
-    } catch (e) { setChapterError(String(e)); }
-    finally { setChapterLoading(false); }
-  }
-  async function openOriginal(input: string) {
-    try {
-      const parsed = new URL(input);
-      if (parsed.protocol !== 'https:' || parsed.hostname !== 'www.comicbox.xyz') throw new Error('只允許開啟 ComicBox HTTPS 網址');
-      await openUrl(parsed.href);
-    } catch (e) { setChapterError(`開啟瀏覽器失敗：${String(e)}`); }
-  }
-  function saveBook() {
-    if (!info) return;
-    const item = { url: info.url, title: info.title, pages: info.pages, chapterId: info.chapterId, savedAt: Date.now() };
-    setBooks(prev => [item, ...prev.filter(b => b.chapterId !== item.chapterId)]);
-  }
-  return <div className={sidebarCollapsed ? "app sidebar-collapsed" : "app"}>
+  const recordRoumanProgress=useCallback((page:number)=>{
+    if(!roumanReading)return;const key=roumanPageKey(roumanReading),total=roumanReading.pageUrls.length;
+    const safe=Math.max(1,Math.min(page,total));
+    setRoumanPages(prev=>prev[key]?.page===safe&&prev[key]?.total===total?prev:{...prev,[key]:{page:safe,total,updatedAt:Date.now()}});
+  },[roumanReading,setRoumanPages]);
+  const recordNhProgress=useCallback((page:number)=>{
+    if(!currentGallery)return;
+    setNhHistory(prev=>prev.map(r=>r.id===currentGallery.id&&r.page!==page?{...r,page,updatedAt:Date.now()}:r));
+  },[currentGallery,setNhHistory]);
+  return <div className={sidebarCollapsed?'app sidebar-collapsed':'app'}>
     <aside className="sidebar">
       <div className="brand"><div className="brandicon"><BookOpen size={22}/></div><div className="brandText"><strong>MangaHub</strong><small>YOUR READING SPACE</small></div></div>
-      <button className="sidebarToggle" type="button" title={sidebarCollapsed ? '展開側邊欄' : '收合側邊欄'} aria-label={sidebarCollapsed ? '展開側邊欄' : '收合側邊欄'} aria-expanded={!sidebarCollapsed} onClick={() => setSidebarCollapsed(v => !v)}>{sidebarCollapsed ? <PanelLeftOpen size={19}/> : <PanelLeftClose size={19}/>}<span>{sidebarCollapsed ? '展開選單' : '收合選單'}</span></button>
-      <div className="sideTitle">工作空間</div>
-      <button title="來源解析" aria-label="來源解析" className={tab === 'source' ? 'nav active' : 'nav'} onClick={() => openTab('source')}><Search size={19}/><span className="navText">來源解析</span></button>
-      <button title="我的書架" aria-label="我的書架" className={tab === 'library' ? 'nav active' : 'nav'} onClick={() => openTab('library')}><Library size={19}/><span className="navText">我的書架</span> <span className="count">{books.length}</span></button>
-      <button title="圖片閱讀器" aria-label="圖片閱讀器" className={tab === 'reader' ? 'nav active' : 'nav'} onClick={() => { setCurrentGallery(null); setReaderReturn(null); readerOrigin.current = null; setReaderUrls(undefined); openTab('reader'); }}><Image size={19}/><span className="navText">圖片閱讀器</span></button>
-      <button title="漫畫探索" aria-label="漫畫探索" className={tab === 'catalog' ? 'nav active' : 'nav'} onClick={() => openTab('catalog')}><Search size={19}/><span className="navText">漫畫探索</span></button>
-      <button title="Rouman5" aria-label="Rouman5" className={tab === 'rouman' ? 'nav active' : 'nav'} onClick={() => openTab('rouman')}><BookOpen size={19}/><span className="navText">Rouman5 探索</span></button>
-      <button title="nHentai 帳號" aria-label="nHentai 帳號" className={tab === 'account' ? 'nav active' : 'nav'} onClick={() => openTab('account')}><UserRound size={19}/><span className="navText">帳號與同步</span></button>
-      <button title="nHentai Gallery" aria-label="nHentai Gallery" className={tab === 'nhentai' ? 'nav active' : 'nav'} onClick={() => openTab('nhentai')}><BookOpen size={19}/><span className="navText">nHentai Gallery</span></button>
-      <button title="來源相容性" aria-label="來源相容性" className={tab === 'capabilities' ? 'nav active' : 'nav'} onClick={() => openTab('capabilities')}><Image size={19}/><span className="navText">來源相容性</span></button>
-      <button title="來源診斷" aria-label="來源診斷" className={tab === 'diagnostics' ? 'nav active' : 'nav'} onClick={() => openTab('diagnostics')}><Globe2 size={19}/><span className="navText">來源診斷</span></button>
-      <div className="asideFoot"><CircleHelp size={16}/><span className="footText">v0.5.9 · Local-first<br/>無原站廣告、無追蹤 SDK</span></div>
+      <button className="sidebarToggle" onClick={()=>setSidebarCollapsed(v=>!v)} title={sidebarCollapsed?'展開側邊欄':'收合側邊欄'}>{sidebarCollapsed?<PanelLeftOpen size={19}/>:<PanelLeftClose size={19}/>}<span>{sidebarCollapsed?'展開選單':'收合選單'}</span></button>
+      <div className="sideTitle">漫畫空間</div>
+      <button className={tab==='catalog'?'nav active':'nav'} onClick={()=>showTab('catalog')}><Search size={19}/><span className="navText">nHentai 探索</span></button>
+      <button className={tab==='rouman'?'nav active':'nav'} onClick={()=>showTab('rouman')}><BookOpen size={19}/><span className="navText">Rouman5 探索</span></button>
+      <button className={tab==='library'?'nav active':'nav'} onClick={()=>showTab('library')}><Library size={19}/><span className="navText">我的漫畫書架</span></button>
+      <button className={tab==='account'?'nav active':'nav'} onClick={()=>showTab('account')}><UserRound size={19}/><span className="navText">帳號與同步</span></button>
+      <div className="asideFoot"><span className="footText">v0.6.2 · Local-first</span></div>
     </aside>
-    <main className="main">
-      <header><span className="eyebrow"><Globe2 size={15}/> MangaHub / {tab === 'source' ? 'Source Inspector' : tab === 'library' ? 'My Library' : tab === 'chapter' ? 'Chapter' : tab === 'diagnostics' ? 'Diagnostics' : tab === 'capabilities' ? 'Source Capabilities' : tab === 'catalog' ? 'Discover' : tab === 'account' ? 'Account' : tab === 'nhentai' ? 'Gallery' : tab === 'rouman' ? 'Rouman5' : 'Reader'}</span><span className="status">● Local-first</span></header>
-      {tab === 'source' && <section className="content">
-        <div className="pill">SOURCE ADAPTER · COMICBOX</div>
-        <h1>探索漫畫，<br/><span>專注於閱讀。</span></h1>
-        <p className="lead">輸入 ComicBox 的公開章節網址，擷取章節名稱、導覽資訊和頁面數。v0.3.3 支援已解析章節快取、章節導覽及 HTTP 錯誤診斷；不處理受保護圖片。</p>
-        <form className="urlbox" onSubmit={e => { e.preventDefault(); void inspect(url); }}><Link size={20}/><input aria-label="章節網址" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://www.comicbox.xyz/free-chapter/…"/><button disabled={loading}>{loading ? <LoaderCircle className="spin" size={17}/> : <Search size={17}/>}<span>解析章節</span></button></form>
-        {error && <div className="error"><strong>解析失敗</strong><p>{error}</p><small>已保留先前成功解析的章節索引。你也可以選擇以系統瀏覽器閱讀。</small></div>}
-        {!info && <div className="startGrid"><div className="hint"><div className="hintIcon"><BookOpen/></div><b>章節資訊</b><p>解析標題與章節目錄</p></div><div className="hint"><div className="hintIcon"><Bookmark/></div><b>個人書架</b><p>將章節保存在本機</p></div><div className="hint"><div className="hintIcon"><Image/></div><b>純淨閱讀</b><p>使用自己的圖片網址閱讀</p></div></div>}
-        {info && <div className="results"><div className="resultTop"><div><div className="pill muted">解析成功 · {info.chapterId}</div><h2>{info.title}</h2><p>{info.pages} 個漫畫頁面節點 · {info.chapters.length} 個章節連結</p></div><button className="secondaryButton" onClick={saveBook}><Plus size={17}/> 收藏此章</button></div>
-          {info.encryptedImagePipeline && <div className="notice"><CircleHelp size={20}/><div><b>偵測到分段／處理後的圖片載入流程</b><p>此來源目前只顯示頁面索引，不會將分段資料視為一般圖片，也不會繞過網站的存取保護。可以在「圖片閱讀器」載入你有權使用的直接圖片網址。</p></div></div>}
-          <div className="resultStats"><div><b>{info.pages}</b><span>頁面節點</span></div><div><b>{info.chapters.length}</b><span>章節連結</span></div><div><b>HTML</b><span>解析方式</span></div></div>
-          <div className="diagnosticActions"><button className="secondaryButton" onClick={() => void inspect(info.url, true)}><RefreshCw size={16}/> 強制重新解析</button><button className="secondaryButton" onClick={() => void openOriginal(info.url)}><ExternalLink size={16}/> 在瀏覽器閱讀</button></div><h3>章節清單</h3><div className="chapterList">{info.chapters.map(c => <button key={c.id} onClick={() => void openChapter(c)}><span>{c.title}</span><ChevronRight size={17}/></button>)}</div></div>}
-      </section>}
-      {tab === 'chapter' && <section className="content">
-        <button className="backButton" onClick={() => setTab('source')}><ChevronLeft size={17}/> 返回章節清單</button>
-        <div className="pill">COMICBOX · CHAPTER</div>
-        <h1>章節<span>閱讀入口</span></h1>
-        <h2>{active?.title ?? '尚未選擇章節'}</h2>
-        {active && <p className="lead">章節 ID：{active.id} · 已保留上一頁的章節目錄</p>}
-        {chapterLoading && <div className="notice"><LoaderCircle className="spin" size={20}/><div>正在取得這一話的公開章節資訊…</div></div>}
-        {chapterError && <div className="error"><strong>網站回應錯誤</strong><p>{chapterError}</p><small>HTTP 403 表示原站拒絕本次請求，並非漫畫不存在；不會自動重試或繞過存取限制。</small></div>}
-        {active && cache[active.id] && <div className="resultStats"><div><b>{cache[active.id].info.pages}</b><span>已快取的頁面節點</span></div><div><b>{cache[active.id].info.chapters.length}</b><span>章節連結</span></div><div><b>本機</b><span>資料索引來源</span></div></div>}
-        <div className="notice"><CircleHelp size={20}/><div><b>目前尚無法在 MangaHub 直接顯示此網站的漫畫圖片</b><p>這個來源的圖片經過分段與處理。v0.3.3 不會嘗試繞過保護；你可以用系統瀏覽器在原站正常閱讀，或使用「圖片閱讀器」讀取有權存取的直接圖片網址。</p></div></div>
-        <div className="diagnosticActions">
-          {active && <button className="primary" onClick={() => void openOriginal(active.url)}><ExternalLink size={17}/> 使用 Edge／預設瀏覽器閱讀</button>}
-          {active && <button className="secondaryButton" disabled={chapterLoading} onClick={() => void openChapter(active, true)}><RefreshCw size={17}/> 重新取得章節資訊</button>}
-          <button className="secondaryButton" onClick={() => setTab('capabilities')}><Image size={17}/> 查看來源能力／直接圖片</button>
-        </div>
-        {active && <p className="detailNote">來源能力：{sourceForUrl(active.url).imageTransport === 'site-managed' ? '原站專用圖片處理，無法直接導入 Reader' : '可使用標準圖片來源'}。</p>}
-        <p className="detailNote">來源網址：{active?.url || '尚未選擇'}。原站在外部瀏覽器開啟時，其廣告仍由原網站控制。</p>
-      </section>}
-      {tab === 'library' && <section className="content"><div className="pill">PERSONAL COLLECTION</div><h1>我的<span>書架</span></h1><p className="lead">收藏資料只儲存在這台裝置，不會上傳到伺服器。</p>{books.length === 0 ? <div className="empty"><Library size={36}/><h2>書架還是空的</h2><p>先到來源解析頁面，解析章節後即可收藏。</p><button onClick={() => setTab('source')} className="primary">前往來源解析</button></div> : <div className="bookGrid">{books.map(book => <div className="book" key={book.chapterId}><div className="bookCover"><BookOpen size={36}/></div><div className="bookInfo"><b>{book.title}</b><small>{book.pages} 個頁面節點</small><div className="bookActions"><button onClick={() => void openChapter({ id: book.chapterId, title: book.title, url: book.url })}>開啟章節</button><button aria-label="移除收藏" onClick={() => setBooks(p => p.filter(x => x.chapterId !== book.chapterId))}><Trash2 size={16}/></button></div></div></div>)}</div>}</section>}
-      <div className={tab === 'capabilities' ? 'sourceView' : 'sourceView is-hidden'}><SourceCapabilities onRead={urls => readDirectImages(urls, 'capabilities')}/></div>
-      <div className={tab === 'nhentai' ? 'sourceView' : 'sourceView is-hidden'}><NhentaiSource onRead={urls => readDirectImages(urls, 'nhentai')}/></div>
-      <div className={tab === 'catalog' ? 'catalogView' : 'catalogView is-hidden'}><NhCatalog adultConfirmed={adultConfirmed} showCovers={showCovers} onAdultChange={setAdultConfirmed} onCoversChange={setShowCovers} favorites={nhFavorites} onToggleFavorite={toggleNhFavorite} history={nhHistory} onClearHistory={() => setNhHistory([])} onReadGallery={readNhGallery} onRepairHistoryCover={repairHistoryCover} blockedTags={blockedTags} onOpenComments={openAccountComments}/></div>
-      <div className={tab === 'rouman' ? 'sourceView' : 'sourceView is-hidden'}><RoumanSource active={tab === 'rouman'} onRead={readRoumanChapter} nhHistory={nhHistory} onOpenNh={openRoumanNhGallery} pageProgress={roumanPages}/></div>
-      {tab === 'account' && <NhAccount onSyncFavorites={syncOfficialFavorites} onRemoteFavorite={handleRemoteFavorite} onOpenGallery={id=>void openAccountGallery(id)} onBlacklistUpdated={applyBlockedTags} selectedGalleryId={accountGalleryId}/>}
-      {tab === 'diagnostics' && <SourceDiagnostics/>}
-      {tab === 'reader' && <Reader key={readerSession} initialUrls={readerUrls} initialPage={roumanReading ? (roumanPages[roumanPageKey(roumanReading)]?.page ?? 1) : undefined} progressKey={roumanReading ? `rouman:${roumanPageKey(roumanReading)}` : undefined} onProgress={currentGallery ? recordNhProgress : roumanReading ? recordRoumanProgress : undefined} galleryTitle={currentGallery?.title ?? (roumanReading ? `${roumanReading.bookTitle} · ${roumanReading.chapterTitle}` : undefined)} onBack={readerReturn ? returnFromReader : undefined} backLabel={readerReturn === 'catalog' ? '返回漫畫列表' : readerReturn === 'nhentai' ? '返回 Gallery' : readerReturn === 'account' ? '返回帳號頁' : readerReturn === 'rouman' ? '返回 Rouman5 章節' : '返回來源頁'}/>} 
+    <main className="main"><header><span className="eyebrow">MangaHub / {tab==='catalog'?'nHentai':tab==='rouman'?'Rouman5':tab==='library'?'My Library':tab==='account'?'Account':'Reader'}</span><span className="status">● Local-first</span></header>
+      <div className={tab==='catalog'?'catalogView':'catalogView is-hidden'}><NhCatalog adultConfirmed={adultConfirmed} showCovers={showCovers} onAdultChange={setAdultConfirmed} onCoversChange={setShowCovers} favorites={nhFavorites} onToggleFavorite={toggleNhFavorite} history={nhHistory} onClearHistory={()=>setNhHistory([])} onReadGallery={readNhGallery} onRepairHistoryCover={repairHistoryCover} blockedTags={blockedTags} onOpenComments={id=>{setAccountGalleryId(id);setTab('account');window.scrollTo(0,0);}}/></div>
+      <div className={tab==='rouman'?'sourceView':'sourceView is-hidden'}><RoumanSource active={tab==='rouman'} onRead={readRoumanChapter} nhHistory={nhHistory} onOpenNh={id=>void openNhId(id,'rouman')} pageProgress={roumanPages}/></div>
+      {tab==='library'&&<UnifiedShelf key={shelfRevision} nhFavorites={nhFavorites} nhHistory={nhHistory} roumanPages={roumanPages} onOpenNh={id=>void openNhId(id,'library')} onOpenRouman={url=>void openRoumanUrl(url)} onShowRouman={openRoumanBook} onRemoveNh={id=>setNhFavorites(p=>p.filter(x=>x.id!==id))} onRemoveRouman={removeRoumanFavorite}/>}
+      {tab==='account'&&<NhAccount onSyncFavorites={syncOfficialFavorites} onRemoteFavorite={handleRemoteFavorite} onOpenGallery={id=>void openNhId(id,'account')} onBlacklistUpdated={setBlockedTags} selectedGalleryId={accountGalleryId}/>}
+      {tab==='reader'&&<Reader key={readerSession} initialUrls={readerUrls} initialPage={roumanReading?roumanPages[roumanPageKey(roumanReading)]?.page??1:undefined} progressKey={roumanReading?`rouman:${roumanPageKey(roumanReading)}`:undefined} onProgress={currentGallery?recordNhProgress:roumanReading?recordRoumanProgress:undefined} galleryTitle={currentGallery?.title??(roumanReading?`${roumanReading.bookTitle} · ${roumanReading.chapterTitle}`:undefined)} onBack={readerOrigin?returnFromReader:undefined} backLabel="返回上一頁"/>}
     </main>
   </div>;
 }

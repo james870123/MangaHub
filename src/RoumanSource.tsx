@@ -56,6 +56,14 @@ export default function RoumanSource({ onRead, active, nhHistory, onOpenNh, page
   const [showCovers, setShowCovers] = useState(() => saved<boolean>('mh-v05-show-covers', false));
   const [sectionFilter, setSectionFilter] = useState('all');
 
+  useEffect(() => {
+    const update = (event: Event) => {
+      const items = (event as CustomEvent<Card[]>).detail;
+      if (Array.isArray(items)) setFavorites(items);
+    };
+    window.addEventListener('mangahub-rouman-favorites-updated', update);
+    return () => window.removeEventListener('mangahub-rouman-favorites-updated', update);
+  }, []);
   useEffect(() => { localStorage.setItem(favKey, JSON.stringify(favorites)); }, [favorites]);
   useEffect(() => { localStorage.setItem(recentKey, JSON.stringify(recent.map(r => ({ ...r, pageUrls: [] })))); }, [recent]);
   useEffect(() => { localStorage.setItem('mh-v05-show-covers', JSON.stringify(showCovers)); }, [showCovers]);
@@ -82,6 +90,14 @@ export default function RoumanSource({ onRead, active, nhHistory, onOpenNh, page
   }
   useEffect(() => { if (active && !catalog) void loadCatalog('home', 0); }, [active]);
 
+  useEffect(() => {
+    const onBook = (event: Event) => {
+      const id = (event as CustomEvent<string>).detail;
+      if (typeof id === 'string' && /^[a-zA-Z0-9_-]+$/.test(id)) void openBook(id);
+    };
+    window.addEventListener('mangahub-open-rouman-book', onBook);
+    return () => window.removeEventListener('mangahub-open-rouman-book', onBook);
+  }, []);
   async function openBook(id: string) {
     setBusy(true); setError(''); setChapterSearch('');
     try {
