@@ -20,46 +20,84 @@ const hashList = (urls: string[]) => {
   return `remote-${(result >>> 0).toString(16)}`;
 };
 
-function ReaderImage({ src, index, eager, onVisible }: { src: string; index: number; eager: boolean; onVisible?: (index: number) => void }) {
+// Only nearby images stay mounted. Layout dimensions are kept independently of
+// the decoded image so recycling a page does not collapse the scroll position.
+const knownPageSizes = new Map<string, { width: number; height: number }>();
+const READER_PREFETCH_MARGIN = '1400px 0px 1400px 0px';
+
+function ReaderImage({ src, index, eager }: { src: string; index: number; eager: boolean }) {
   const node = useRef<HTMLDivElement>(null);
-  const canvasNode = useRef<HTMLCanvasElement>(null);
+  const canvasNode = useRef<HTMLCanvasElement | null>(null);
+  // Release the backing bitmap as soon as a recycled page's canvas unmounts.
+  const attachCanvas = useCallback((next: HTMLCanvasElement | null) => {
+    if (!next && canvasNode.current) {
+      canvasNode.current.width = 0;
+      canvasNode.current.height = 0;
+    }
+    canvasNode.current = next;
+  }, []);
   const repairStrips = needsRoumanStripRepair(src);
   const [state, setState] = useState<PageStatus>('idle');
   const [attempt, setAttempt] = useState(0);
-  const [observed, setObserved] = useState(eager);
-  useEffect(() => { setState('idle'); setAttempt(0); setObserved(eager); }, [src, eager]);
+  const [active, setActive] = useState(eager);
+  const [size, setSize] = useState(() => knownPageSizes.get(src));
+
   useEffect(() => {
-    if (!node.current || !('IntersectionObserver' in window)) { setObserved(true); return; }
-    const ob = new IntersectionObserver(entries => {
-      for (const entry of entries) if (entry.isIntersecting) {
-        setObserved(true);
-        onVisible?.(index);
-      }
-    }, { rootMargin: '900px 0px 900px 0px', threshold: 0.01 });
-    ob.observe(node.current);
-    return () => ob.disconnect();
-  }, [index, onVisible]);
-  return <div className="mh-image-slot" ref={node} data-page={index + 1}>
-    {observed ? <>
-      <img key={`${src}-${attempt}`} src={src} loading={repairStrips ? 'eager' : (eager ? 'eager' : 'lazy')}
-        decoding="async" referrerPolicy="no-referrer" alt={`漫畫第 ${index + 1} 頁`}
-        // Keep the image in layout to reserve its real height for the canvas.
-        // display:none + native lazy loading can leave invisible 80px slots.
+    setState('idle');
+    setAttempt(0);
+    setSize(knownPageSizes.get(src));
+    setActive(eager);
+  }, [src, eager]);
+
+  useEffect(() => {
+    const target = node.current;
+    if (!target || eager) { setActive(true); return; }
+    if (!('IntersectionObserver' in window)) { setActive(true); return; }
+    const observer = new IntersectionObserver(([entry]) => {
+      // Returning false removes the <img> and the decoded Canvas backing store.
+      setActive(entry.isIntersecting);
+    }, { rootMargin: READER_PREFETCH_MARGIN, threshold: 0 });
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [src, eager]);
+
+  useEffect(() => { if (!active) setState('idle'); }, [active]);
+
+  const handleLoad = (image: HTMLImageElement) => {
+    const width = image.naturalWidth, height = image.naturalHeight;
+    if (!width || !height) { setState('failed'); return; }
+    const dimensions = { width, height };
+    knownPageSizes.set(src, dimensions);
+    if (knownPageSizes.size > 1200) knownPageSizes.delete(knownPageSizes.keys().next().value!);
+    setSize(dimensions);
+    if (repairStrips) {
+      try {
+        if (!canvasNode.current) throw new Error('Canvas missing');
+        drawRoumanImage(image, canvasNode.current, src);
+      } catch { setState('failed'); return; }
+    }
+    setState('ready');
+  };
+
+  // For recycled pages use their natural aspect ratio instead of an empty
+  // fixed-height slot; this keeps scroll offset and saved page numbers stable.
+  const placeholderStyle: React.CSSProperties | undefined = !active
+    ? (size ? { aspectRatio: `${size.width} / ${size.height}` } : { minHeight: 420 })
+    : undefined;
+
+  return <div className="mh-image-slot" ref={node} data-page={index + 1} style={placeholderStyle}>
+    {active ? <>
+      <img key={`${src}-${attempt}`} src={src} loading="eager" decoding="async"
+        referrerPolicy="no-referrer" alt={`漫畫第 ${index + 1} 頁`}
+        // Preserve the original image's layout height; Rouman5's repaired
+        // canvas overlays it without altering the verified strip algorithm.
         style={repairStrips ? { visibility: 'hidden' } : undefined}
-        onLoad={(event) => {
-          if (repairStrips) {
-            try {
-              if (!canvasNode.current) throw new Error('Canvas missing');
-              drawRoumanImage(event.currentTarget, canvasNode.current, src);
-            } catch { setState('failed'); return; }
-          }
-          setState('ready');
-        }}
+        onLoad={event => handleLoad(event.currentTarget)}
         onError={() => setState('failed')}/>
-      {repairStrips && <canvas ref={canvasNode} aria-label={`漫畫第 ${index + 1} 頁`}
+      {repairStrips && <canvas ref={attachCanvas} aria-label={`漫畫第 ${index + 1} 頁`}
         role="img" style={{ position: 'absolute', inset: 0, display: state === 'ready' ? 'block' : 'none', width: '100%', height: '100%' }}/>} 
-    </> : <div className="mh-placeholder">第 {index + 1} 頁 · 等待載入</div>}
-    {observed && state === 'failed' && <div className="mh-load-error"><AlertCircle size={19}/><strong>第 {index + 1} 頁載入失敗</strong><small>可能是跨來源、存取權限、失效連結或圖片格式問題。</small><button onClick={() => { setState('loading'); setAttempt(n => n + 1); }}><RotateCcw size={15}/> 重試</button></div>}
+    </> : <div className="mh-placeholder mh-recycled-placeholder">第 {index + 1} 頁 · 捲動時載入</div>}
+    {active && state === 'failed' && <div className="mh-load-error"><AlertCircle size={19}/><strong>第 {index + 1} 頁載入失敗</strong><small>可能是網路暫時中斷、來源限制或圖片格式問題。</small><button onClick={() => { setState('loading'); setAttempt(n => n + 1); }}><RotateCcw size={15}/> 重試</button></div>}
   </div>;
 }
 
@@ -135,11 +173,14 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
     if (restoring.current || !scroller.current) return;
     const slots = scroller.current.querySelectorAll<HTMLElement>('[data-page]');
     const markerY = window.innerHeight * 0.32;
-    let result = 0;
-    for (const slot of slots) {
-      const rect = slot.getBoundingClientRect();
-      if (rect.top <= markerY) result = Number(slot.dataset.page || 1) - 1;
-      else break;
+    // Binary search avoids measuring every image on each scroll frame.
+    let low = 0, high = slots.length - 1, result = 0;
+    while (low <= high) {
+      const middle = (low + high) >>> 1;
+      if (slots[middle].getBoundingClientRect().top <= markerY) {
+        result = middle;
+        low = middle + 1;
+      } else high = middle - 1;
     }
     setScrollPage(p => p === result ? p : result);
   }, []);
@@ -199,7 +240,7 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
     return () => { for (const img of pending) img.src = ''; };
   }, [page, mode, sources]);
   const current = Math.min(page, Math.max(0, sources.length - 1));
-  // Visibility observation is used for image loading only; scroll events track progress.
+  // Offscreen images recycle their decoded resources; scroll events still track progress independently.
   return <section className="content readerContent">
     {onBack && <div className="readerReturnBar"><button className="readerBack" onClick={onBack} title="返回先前瀏覽的列表（Esc / Alt+←）"><ArrowLeft size={18}/> {backLabel ?? '返回上一頁'}</button><span>Esc / Alt + ← 返回</span></div>}
     <div className="pill">MANGAHUB · READER</div>
@@ -226,7 +267,7 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
     </div>}
     {sources.length === 0 ? <div className="empty"><ImagePlus size={34}/><h2>等待圖片</h2><p>可選取自己的漫畫圖片，或貼上有權存取的 HTTPS 圖片網址。</p></div> : mode === 'vertical' ?
       <div ref={scroller} className="scrollReader mh-scroll-reader" style={{ '--reader-width': `${zoom}%` } as React.CSSProperties}>
-        {sources.map((item, i) => <ReaderImage key={`${item.url}-${i}`} src={item.url} index={i} eager={i < 2} />)}
+        {sources.map((item, i) => <ReaderImage key={`${item.url}-${i}`} src={item.url} index={i} eager={false} />)}
       </div> : <div className="singleReader mh-single-reader">
         <div className="pager">
           <button disabled={current === 0} onClick={() => goTo(current - 1)}><ChevronLeft size={16}/> 上一頁</button>

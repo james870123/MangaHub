@@ -296,3 +296,6 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .shelfActions button{border:1px solid #56436e;color:inherit;background:#342a41;padding:7px 11px;border-radius:8px;cursor:pointer}
 .shelfEmpty{padding:50px;text-align:center;opacity:.8}
 @media(max-width:640px){.shelfGrid{grid-template-columns:1fr}.shelfTools label{flex:1;min-width:130px}}
+
+/* v0.6.3: preserve the height of recycled pages without retaining image/Canvas pixels. */
+.mh-recycled-placeholder{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;background:#0b0c10;color:#858998;padding:12px;}
