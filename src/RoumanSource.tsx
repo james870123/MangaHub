@@ -13,7 +13,7 @@ type Card = { id: string; title: string; url: string; coverUrl: string | null; s
 type Catalog = { mode: string; page: number; books: Card[]; hasNext: boolean };
 type ChapterLink = { index: number; name: string; url: string };
 type BookDetail = { id: string; title: string; coverUrl: string | null; description: string; chapters: ChapterLink[]; tags?: string[] };
-type Mode = 'home' | 'all' | 'ongoing' | 'completed' | 'search';
+type Mode = 'home' | 'new' | 'all' | 'ongoing' | 'completed' | 'search';
 type Order = 'site' | 'az' | 'za';
 type NhReading = { id: number; title: string; page: number; total: number; updatedAt: number };
 type Props = { onRead: (chapter: RoumanChapter) => void; active: boolean; nhHistory: NhReading[]; onOpenNh: (id: number) => void };
@@ -138,7 +138,7 @@ export default function RoumanSource({ onRead, active, nhHistory, onOpenNh }: Pr
   const isSaved = (id: string) => favorites.some(f => f.id === id);
   return <section className="content roumanPage roumanExplore">
     <div className="roumanHeading">
-      <div><div className="pill">SOURCE · ROUMAN5 · v0.6.1</div>
+      <div><div className="pill">SOURCE · ROUMAN5 · v0.6.1 · NEW</div>
         <h1>Rouman5 <span>探索漫畫</span></h1>
         <p className="lead">依公開目錄探索作品、查看章節與接續閱讀。漫畫內容由原站提供。</p></div>
       {recent.length > 0 && showList && <button className="roumanResume" disabled={busy} onClick={() => void startChapter(recent[0].url)}>
@@ -150,7 +150,7 @@ export default function RoumanSource({ onRead, active, nhHistory, onOpenNh }: Pr
       <button className="primary" disabled={busy || !globalTerm.trim()} type="submit">全站搜尋</button>
     </form>
     <div className="roumanToolbar" role="navigation" aria-label="Rouman5 作品目錄">
-      {([['home','熱門首頁'],['all','全部漫畫'],['ongoing','連載'],['completed','完結']] as const).map(([key,label]) =>
+      {([['home','熱門首頁'],['new','新上架'],['all','全部漫畫'],['ongoing','連載'],['completed','完結']] as const).map(([key,label]) =>
         <button key={key} className={mode === key && !showFavorites ? 'toggle on' : 'toggle'} disabled={busy} onClick={() => void loadCatalog(key, 0)}>{label}</button>)}
       <button className={showFavorites ? 'toggle on' : 'toggle'} onClick={() => { setShowFavorites(true); setShowHistory(false); setDetail(null); setChapter(null); setError(''); }}><Heart size={15}/> 我的收藏 ({favorites.length})</button>
       <button className={showHistory ? 'toggle on' : 'toggle'} onClick={() => { setShowHistory(true); setShowFavorites(false); setDetail(null); setChapter(null); setError(''); }}><History size={15}/> 跨來源閱讀紀錄 ({combinedHistory.length})</button>
@@ -169,7 +169,7 @@ export default function RoumanSource({ onRead, active, nhHistory, onOpenNh }: Pr
         {query && <button aria-label="清除搜尋" className="roumanClear" onClick={() => setQuery('')}><X size={16}/></button>}</div>
         <label className="roumanSort">顯示順序<select value={order} onChange={e => setOrder(e.target.value as Order)}><option value="site">原站排序</option><option value="az">標題 A → Z</option><option value="za">標題 Z → A</option></select></label>
       </div>
-      <div className="roumanListMeta"><span>{showFavorites ? '我的收藏' : mode === 'home' ? '首頁排行' : mode === 'all' ? '全部漫畫' : mode === 'ongoing' ? '連載中' : mode === 'search' ? '全站搜尋結果' : '已完結'} · {visible.length} 部作品</span><small>上方是全站搜尋；此處僅篩選目前這一頁</small></div>
+      <div className="roumanListMeta"><span>{showFavorites ? '我的收藏' : mode === 'home' ? '首頁排行' : mode === 'new' ? '新上架' : mode === 'all' ? '全部漫畫' : mode === 'ongoing' ? '連載中' : mode === 'search' ? '全站搜尋結果' : '已完結'} · {visible.length} 部作品</span><small>上方是全站搜尋；此處僅篩選目前這一頁</small></div>
     </>}
     {error && <div className="error" role="alert"><b>載入失敗</b><p>{error}</p><button className="secondaryButton" disabled={busy} onClick={() => { setError(''); if (detail) void openBook(detail.id); else if (mode === 'search') void runSearch(searchedTerm, page); else void loadCatalog(mode, page); }}>重試</button></div>}
     {busy && <div className="notice" role="status"><LoaderCircle className="spin" size={18}/><div>正在讀取來源公開頁面…</div></div>}
@@ -184,7 +184,7 @@ export default function RoumanSource({ onRead, active, nhHistory, onOpenNh }: Pr
             <div className="roumanCardBottom"><small>{card.section}</small><button aria-label={isSaved(card.id) ? '取消收藏' : '收藏作品'} aria-pressed={isSaved(card.id)} className="roumanHeart" onClick={() => changeFavorite(card)}><Heart size={17} fill={isSaved(card.id) ? 'currentColor' : 'none'}/></button></div></div>
         </article>)}</div></div>;
     }))}
-    {showList && !showFavorites && !showHistory && mode !== 'home' && <div className="roumanPager">
+    {showList && !showFavorites && !showHistory && mode !== 'home' && mode !== 'new' && <div className="roumanPager">
       <button className="toggle" disabled={busy || page <= 0} onClick={() => mode === 'search' ? void runSearch(searchedTerm, page - 1) : void loadCatalog(mode, page - 1)}><ChevronLeft size={15}/> 上一頁</button><span>第 {page + 1} 頁</span>
       <button className="toggle" disabled={busy || !catalog?.hasNext} onClick={() => mode === 'search' ? void runSearch(searchedTerm, page + 1) : void loadCatalog(mode, page + 1)}>下一頁 <ChevronRight size={15}/></button>
     </div>}

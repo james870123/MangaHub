@@ -1057,9 +1057,9 @@ fn parse_rouman_catalog(html: &str, mode: &str, page: u32) -> RoumanCatalog {
     for node in doc.root_element().descendants() {
         let Some(el) = ElementRef::wrap(node) else { continue; };
         let tag = el.value().name();
-        if mode == "home" && matches!(tag, "h1" | "h2" | "h3") {
+        if matches!(mode, "home" | "new") && matches!(tag, "h1" | "h2" | "h3" | "h4") {
             let heading = el.text().collect::<String>().trim().to_string();
-            if ["正熱門", "今日最佳", "最近更新", "本週熱門", "已完結"].iter().any(|t| heading.contains(t)) {
+            if ["正熱門", "今日最佳", "最近更新", "本週熱門", "已完結", "新上架", "最新上架"].iter().any(|t| heading.contains(t)) {
                 section = heading;
             }
         }
@@ -1090,6 +1090,41 @@ fn parse_rouman_catalog(html: &str, mode: &str, page: u32) -> RoumanCatalog {
 #[command]
 async fn browse_rouman_catalog(mode: String, page: u32) -> Result<RoumanCatalog, String> {
     if page > 1000 { return Err("頁碼超出限制".into()); }
+    // 「新上架」和「最近更新」不同：只讀取網站明確標示的新上架作品。
+    // 優先使用首頁分類；如果網站改成獨立清單，再跟隨公開站內連結。
+    if mode == "new" {
+        if page > 0 { return Err("新上架目前沒有經驗證的分頁來源".into()); }
+        let home = rouman_html(Url::parse("https://rouman5.com/home").unwrap()).await?;
+        let mut grouped = parse_rouman_catalog(&home, "home", 0);
+        grouped.books.retain(|item| item.section.contains("新上架") || item.section.contains("最新上架"));
+        if !grouped.books.is_empty() {
+            grouped.mode = mode;
+            grouped.has_next = false;
+            return Ok(grouped);
+        }
+        // Some site revisions expose the section as a dedicated public link.
+        // Reject off-site links, unexpected paths, and redirects.
+        let document = Html::parse_document(&home);
+        let anchor_selector = Selector::parse("a[href]").map_err(|e| e.to_string())?;
+        for anchor in document.select(&anchor_selector) {
+            let label = anchor.text().collect::<String>();
+            if !label.contains("新上架") && !label.contains("最新上架") { continue; }
+            let Some(href) = anchor.value().attr("href") else { continue; };
+            let Ok(url) = Url::parse("https://rouman5.com/home").unwrap().join(href) else { continue; };
+            if url.scheme() != "https" || url.host_str() != Some("rouman5.com")
+                || url.port().is_some() || !url.username().is_empty()
+                || url.fragment().is_some() || url.path() == "/home"
+                || !(url.path().starts_with("/books") || url.path().starts_with("/new")) { continue; }
+            let html = rouman_html(url).await?;
+            let mut list = parse_rouman_catalog(&html, "new", 0);
+            if !list.books.is_empty() {
+                list.mode = mode;
+                list.has_next = false;
+                return Ok(list);
+            }
+        }
+        return Err("網站這次沒有提供可辨識的「新上架」作品區塊或連結；不會拿「最近更新」冒充新上架。".into());
+    }
     let mut url = match mode.as_str() {
         "home" => Url::parse("https://rouman5.com/home").unwrap(),
         "all" | "ongoing" | "completed" => Url::parse("https://rouman5.com/books").unwrap(),
@@ -1207,5 +1242,22 @@ mod rouman_search_tests {
     fn empty_search_is_valid() {
         let list = parse_rouman_catalog("<main><p>沒有結果</p></main>", "search", 0);
         assert!(list.books.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod rouman_new_arrivals_tests {
+    use super::*;
+
+    #[test]
+    fn homepage_new_arrivals_are_separate_from_recent_updates() {
+        let html = r#"<main><h2>最近更新</h2><a href='/books/abcdefgh123'><img alt='更新作品'/></a>
+            <h2>新上架</h2><a href='/books/abcdefgh456'><img alt='新上架作品'/></a>
+            <h2>本週熱門</h2><a href='/books/abcdefgh789'><img alt='熱門作品'/></a></main>"#;
+        let list = parse_rouman_catalog(html, "home", 0);
+        let new_books: Vec<_> = list.books.iter().filter(|b| b.section.contains("新上架")).collect();
+        assert_eq!(new_books.len(), 1);
+        assert_eq!(new_books[0].id, "abcdefgh456");
+        assert_ne!(new_books[0].id, list.books[0].id);
     }
 }
