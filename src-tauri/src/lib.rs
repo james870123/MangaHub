@@ -44,14 +44,28 @@ const IMAGE_CACHE_MAX_ITEM: usize = 12 * 1024 * 1024;
 #[serde(rename_all = "camelCase")]
 struct ImageCacheStats { bytes: u64, files: usize, rouman_bytes: u64, nhentai_bytes: u64 }
 
+// Keep chapter parsing and the optional disk cache on the same explicit CDN allowlist.
+// Do not accept arbitrary domains from an untrusted chapter HTML document.
+fn validate_rouman_image_source(u: &Url) -> Result<(), &'static str> {
+    if u.scheme() != "https" { return Err("不是 HTTPS 網址"); }
+    if u.port().is_some() || !u.username().is_empty() || u.password().is_some() {
+        return Err("包含自訂連接埠或帳號資訊");
+    }
+    if !matches!(u.host_str().unwrap_or(""),
+        "v1.towm85.xyz" | "v2.towm85.xyz" | "v3.towm85.xyz" | "v4.towm85.xyz") {
+        return Err("圖片主機不在已驗證的 CDN 清單");
+    }
+    if !u.path().starts_with("/m/") { return Err("圖片路徑不是 /m/ 開頭"); }
+    Ok(())
+}
+
 fn image_cache_url(input: &str) -> Result<(Url, &'static str), String> {
     let u = Url::parse(input).map_err(|_| "無效圖片網址")?;
     if u.scheme() != "https" || u.port().is_some() || !u.username().is_empty() || u.password().is_some() || u.fragment().is_some() {
         return Err("快取只允許不含帳密的 HTTPS 圖片網址".into());
     }
     let host = u.host_str().unwrap_or("");
-    let source = if matches!(host, "v1.towm85.xyz" | "v2.towm85.xyz" | "v3.towm85.xyz" | "v4.towm85.xyz")
-        && u.path().starts_with("/m/") { "rouman" }
+    let source = if validate_rouman_image_source(&u).is_ok() { "rouman" }
     else if host == "i.nhentai.net" && u.path().starts_with("/galleries/") { "nhentai" }
     else { return Err("來源未列入圖片快取允許清單".into()); };
     Ok((u, source))
@@ -1026,13 +1040,17 @@ fn parse_rouman_html(html: &str, target: &Url) -> Result<RoumanChapter, String> 
         return Err("圖片清單為空或超出合理數量".into());
     }
     let mut urls = Vec::with_capacity(paths.len());
-    for path in paths {
-        let u = Url::parse(&path).map_err(|_| "圖片清單含有不合法網址")?;
-        let host = u.host_str().unwrap_or("");
-        if u.scheme() != "https" || !matches!(host, "v1.towm85.xyz" | "v2.towm85.xyz" | "v3.towm85.xyz" | "v4.towm85.xyz")
-            || !u.path().starts_with("/m/") || u.port().is_some()
-            || !u.username().is_empty() || u.password().is_some() {
-            return Err("圖片清單包含未驗證的來源網域，已停止解析".into());
+    for (index, path) in paths.into_iter().enumerate() {
+        let page = index + 1;
+        let u = Url::parse(&path)
+            .map_err(|_| format!("第 {page} 張圖片網址格式錯誤，已停止解析"))?;
+        if let Err(reason) = validate_rouman_image_source(&u) {
+            // Report host and a path category, never the entire signed image URL.
+            // Its query string may include temporary tokens or identifiers.
+            let host = u.host_str().unwrap_or("(無主機)");
+            return Err(format!(
+                "第 {page} 張圖片來源驗證失敗：主機 {host}；原因：{reason}。已停止解析，請提供此訊息以確認來源 CDN。"
+            ));
         }
         urls.push(u.to_string());
     }
@@ -1086,6 +1104,22 @@ async fn inspect_rouman_chapter(url: String) -> Result<RoumanChapter, String> {
 #[cfg(test)]
 mod rouman_tests {
     use super::*;
+    #[test]
+    fn rejects_new_cdn_with_actionable_and_non_sensitive_error() {
+        let target = Url::parse("https://rouman5.com/books/47376792-2816-4ccf-a146-957b8d6a2ac6/0").unwrap();
+        let html = r#"imagePaths:$R[3]=["https://v1.towm85.xyz/m/1.jpg", "https://v5.towm85.xyz/m/2.jpg?token=secret-value"]"#;
+        let error = parse_rouman_html(html, &target).err().expect("expected a rejected CDN");
+        assert!(error.contains("第 2 張"));
+        assert!(error.contains("v5.towm85.xyz"));
+        assert!(error.contains("CDN"));
+        assert!(!error.contains("secret-value"));
+    }
+    #[test]
+    fn shared_cdn_validation_rejects_untrusted_paths_and_hosts() {
+        assert!(validate_rouman_image_source(&Url::parse("https://v2.towm85.xyz/m/1.jpg?sr=1").unwrap()).is_ok());
+        assert!(validate_rouman_image_source(&Url::parse("https://v2.towm85.xyz.evil.test/m/1.jpg").unwrap()).is_err());
+        assert!(validate_rouman_image_source(&Url::parse("https://v2.towm85.xyz/other/1.jpg").unwrap()).is_err());
+    }
     #[test]
     fn parses_streamed_image_paths() {
         let target=Url::parse("https://rouman5.com/books/cmegn4syy019ved077i2841wl/0").unwrap();
