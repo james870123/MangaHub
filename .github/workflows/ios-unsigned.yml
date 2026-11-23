@@ -21,8 +21,27 @@ jobs:
         run: npm install
       - name: Initialize iOS project
         run: npm run tauri ios init -- --ci
+      # Force Xcode signing off for the whole archive build, not only Tauri's
+      # export stage. The xcconfig applies to xcodebuild launched by Tauri.
+      # No Apple credentials are needed here: Sideloadly signs the finished IPA.
+      - name: Configure unsigned Xcode archive
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/mangahub-unsigned.xcconfig" <<'XCCONFIG'
+          CODE_SIGNING_ALLOWED = NO
+          CODE_SIGNING_REQUIRED = NO
+          CODE_SIGN_IDENTITY =
+          CODE_SIGN_STYLE = Manual
+          DEVELOPMENT_TEAM =
+          XCCONFIG
       - name: Build unsigned iOS archive
-        run: npm run tauri ios build -- --target aarch64 --no-sign --archive-only --ci
+        env:
+          XCODE_XCCONFIG_FILE: ${{ runner.temp }}/mangahub-unsigned.xcconfig
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run tauri ios build -- --target aarch64 --no-sign --archive-only --ci
+
       - name: Create unsigned IPA for Sideloadly
         shell: bash
         run: |
