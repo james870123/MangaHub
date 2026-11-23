@@ -224,3 +224,40 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .roumanPager,.roumanDetailActions{display:flex;align-items:center;gap:14px;justify-content:center;margin:20px 0}.roumanPager .toggle{margin:0}
 .roumanDetail{margin-top:30px}.roumanChapterList{max-height:520px}.roumanResult{margin-top:24px}.roumanManual,.roumanRecent{margin:24px 0;padding:14px;border:1px solid #363341;border-radius:11px}.roumanManual summary,.roumanRecent summary{cursor:pointer;color:#d9a8e6}.roumanManual .urlbox{margin-top:15px}
 @media(max-width:650px){.roumanExplore{padding:20px 4%}.roumanGrid{grid-template-columns:repeat(auto-fill,minmax(122px,1fr));gap:10px}.roumanFilter{flex-wrap:wrap}.roumanFilter small{width:100%}}
+
+/* Rouman5 v0.6.0: fluid catalog, chapter browser and reading continuity */
+.roumanHeading{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap}
+.roumanHeading .lead{max-width:850px}
+.roumanResume{display:flex;align-items:center;gap:11px;min-width:240px;max-width:380px;background:#282232;border:1px solid #55405d;color:#e6d5ee;border-radius:13px;padding:12px 15px;text-align:left;cursor:pointer}
+.roumanResume span{display:grid;gap:5px;min-width:0;flex:1}.roumanResume small{display:block;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;color:#b9a9c4;font-size:11px}
+.roumanSectionTabs{display:flex;gap:8px;overflow-x:auto;padding:5px 0 13px;scrollbar-width:thin}
+.roumanSectionTabs button{white-space:nowrap;border:1px solid #453d4d;background:#25212d;color:#c8b9d0;border-radius:9px;padding:9px 12px;cursor:pointer}
+.roumanSectionTabs button.active{border-color:#b877cf;background:#513459;color:white}
+.roumanBrowseTools{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.roumanBrowseTools .roumanFilter{flex:1 1 360px;margin:8px 0 12px;min-width:230px}
+.roumanClear{border:0;background:transparent;color:#c9b7d6;cursor:pointer;display:grid;place-items:center}
+.roumanSort{display:flex;align-items:center;gap:9px;color:#a9a0af;font-size:12px}
+.roumanSort select{background:#22232c;color:#e9e4ec;border:1px solid #484052;border-radius:10px;padding:11px;min-height:43px}
+.roumanListMeta{display:flex;justify-content:space-between;gap:14px;align-items:center;flex-wrap:wrap;color:#ded2e5;font-size:13px;margin-top:4px}.roumanListMeta small{color:#a9a3b0}
+.roumanGrid{grid-template-columns:repeat(auto-fill,minmax(min(168px,100%),1fr))}
+.roumanCard{transition:transform .18s ease,border-color .18s ease}.roumanCard:hover{transform:translateY(-3px);border-color:#765684}
+.roumanCoverButton{cursor:pointer}.roumanCoverButton:focus-visible,.roumanTitle:focus-visible,.roumanChapterItem:focus-visible{outline:2px solid #d199e7;outline-offset:2px}
+.roumanEmpty{padding:42px 24px;text-align:center;color:#b9a9c4;border:1px dashed #4c4355;border-radius:14px;display:grid;gap:9px;justify-items:center;margin:20px 0}
+.roumanEmpty h3{margin:0;color:#f0e9f3}.roumanEmpty p{margin:0}
+.roumanBack{display:flex;align-items:center;gap:6px;background:transparent;color:#cfa5e2;border:0;cursor:pointer;padding:8px 0;margin-bottom:18px}
+.roumanDetailHero{display:flex;align-items:flex-start;gap:26px;background:#1b1d26;border:1px solid #36303f;border-radius:16px;padding:24px}
+.roumanDetailCover{width:clamp(130px,18vw,220px);aspect-ratio:3/4;flex-shrink:0;background:linear-gradient(130deg,#51365b,#242632);display:grid;place-items:center;color:#d0a8df;border-radius:12px;overflow:hidden}
+.roumanDetailCover img{width:100%;height:100%;object-fit:cover}
+.roumanDetailBody{min-width:0;flex:1}.roumanDetailBody h2{font-size:clamp(23px,3vw,36px);line-height:1.3;margin:0 0 12px;overflow-wrap:anywhere}
+.roumanDetailBody .detailNote{white-space:pre-line;max-width:850px;color:#b8b2c3;line-height:1.7}
+.roumanDetailActions{justify-content:flex-start;flex-wrap:wrap}.roumanDetailActions>span{display:flex;align-items:center;gap:6px;color:#b9adbf}
+.roumanChaptersHeader{display:flex;gap:14px;align-items:end;justify-content:space-between;flex-wrap:wrap;margin:30px 0 15px}.roumanChaptersHeader h3{margin:0 0 5px}.roumanChaptersHeader small{color:#aaa4b2}
+.roumanChapterTools{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.roumanChapterTools .toggle{margin:0}
+.roumanChapterSearch{display:flex;align-items:center;gap:8px;border:1px solid #463d4e;border-radius:10px;background:#20222c;padding:9px 12px;color:#b5a8be}
+.roumanChapterSearch input{border:0;outline:0;background:transparent;color:#eee;min-width:130px}
+.roumanChapterGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+.roumanChapterItem{display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:54px;border:1px solid #3e3747;border-radius:11px;background:#1d202a;color:#eee;padding:13px 14px;text-align:left;cursor:pointer;overflow-wrap:anywhere}
+.roumanChapterItem:hover{background:#32273b;border-color:#9169a4}.roumanChapterItem.last{border-color:#845e95;background:#30253a}
+.roumanChapterItem small{display:flex;align-items:center;gap:4px;white-space:nowrap;color:#d4aadf}
+@media(max-width:700px){.roumanDetailHero{padding:14px;gap:14px}.roumanDetailCover{width:116px}.roumanHeading{align-items:stretch}.roumanResume{max-width:none;width:100%}.roumanChapterGrid{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){.roumanCard{transition:none}}
