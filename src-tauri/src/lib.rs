@@ -52,7 +52,8 @@ fn validate_rouman_image_source(u: &Url) -> Result<(), &'static str> {
         return Err("包含自訂連接埠或帳號資訊");
     }
     if !matches!(u.host_str().unwrap_or(""),
-        "v1.towm85.xyz" | "v2.towm85.xyz" | "v3.towm85.xyz" | "v4.towm85.xyz") {
+        "v1.towm85.xyz" | "v2.towm85.xyz" | "v3.towm85.xyz" | "v4.towm85.xyz"
+        | "v1.kelv47.xyz" | "kelv47.xyz") {
         return Err("圖片主機不在已驗證的 CDN 清單");
     }
     if !u.path().starts_with("/m/") { return Err("圖片路徑不是 /m/ 開頭"); }
@@ -202,6 +203,10 @@ mod image_cache_tests {
     #[test]
     fn allowed_image_urls_only() {
         assert!(image_cache_url("https://v1.towm85.xyz/m/sample.jpg").is_ok());
+        assert!(image_cache_url("https://v1.kelv47.xyz/m/sample.jpg?sr=1").is_ok());
+        assert!(image_cache_url("https://kelv47.xyz/m/sample.jpg").is_ok());
+        assert!(image_cache_url("https://v1.kelv47.xyz.evil.test/m/1.jpg").is_err());
+        assert!(image_cache_url("http://v1.kelv47.xyz/m/1.jpg").is_err());
         assert!(image_cache_url("https://i.nhentai.net/galleries/123/1.jpg").is_ok());
         assert!(image_cache_url("https://localhost/m/private.jpg").is_err());
         assert!(image_cache_url("https://v1.towm85.xyz.evil.test/m/1.jpg").is_err());
@@ -1117,6 +1122,8 @@ mod rouman_tests {
     #[test]
     fn shared_cdn_validation_rejects_untrusted_paths_and_hosts() {
         assert!(validate_rouman_image_source(&Url::parse("https://v2.towm85.xyz/m/1.jpg?sr=1").unwrap()).is_ok());
+        assert!(validate_rouman_image_source(&Url::parse("https://v1.kelv47.xyz/m/1.jpg?sr=1").unwrap()).is_ok());
+        assert!(validate_rouman_image_source(&Url::parse("https://v1.kelv47.xyz.evil.test/m/1.jpg").unwrap()).is_err());
         assert!(validate_rouman_image_source(&Url::parse("https://v2.towm85.xyz.evil.test/m/1.jpg").unwrap()).is_err());
         assert!(validate_rouman_image_source(&Url::parse("https://v2.towm85.xyz/other/1.jpg").unwrap()).is_err());
     }
