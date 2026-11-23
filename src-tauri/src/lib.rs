@@ -34,6 +34,173 @@ fn validate_chapter_url(input: &str) -> Result<Url, String> {
     Ok(url)
 }
 
+// v0.6.4: opt-in, bounded on-device image cache. Only existing, validated
+// public image URLs are accepted. No cookies, redirects or anti-bot bypass.
+use tauri::Manager;
+
+const IMAGE_CACHE_MAX_ITEM: usize = 12 * 1024 * 1024;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImageCacheStats { bytes: u64, files: usize, rouman_bytes: u64, nhentai_bytes: u64 }
+
+fn image_cache_url(input: &str) -> Result<(Url, &'static str), String> {
+    let u = Url::parse(input).map_err(|_| "無效圖片網址")?;
+    if u.scheme() != "https" || u.port().is_some() || !u.username().is_empty() || u.password().is_some() || u.fragment().is_some() {
+        return Err("快取只允許不含帳密的 HTTPS 圖片網址".into());
+    }
+    let host = u.host_str().unwrap_or("");
+    let source = if matches!(host, "v1.towm85.xyz" | "v2.towm85.xyz" | "v3.towm85.xyz" | "v4.towm85.xyz")
+        && u.path().starts_with("/m/") { "rouman" }
+    else if host == "i.nhentai.net" && u.path().starts_with("/galleries/") { "nhentai" }
+    else { return Err("來源未列入圖片快取允許清單".into()); };
+    Ok((u, source))
+}
+
+fn cache_hash(s: &str) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in s.as_bytes() { h = (h ^ u64::from(b)).wrapping_mul(0x100000001b3); }
+    format!("{h:016x}")
+}
+
+fn cache_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path().app_cache_dir().map(|p| p.join("image-cache-v1"))
+        .map_err(|e| format!("無法取得快取路徑：{e}"))
+}
+
+fn cache_stats_at(base: &std::path::Path) -> ImageCacheStats {
+    let mut out = ImageCacheStats {bytes: 0, files: 0, rouman_bytes: 0, nhentai_bytes: 0};
+    for (source, sub) in [("rouman", true), ("nhentai", false)] {
+        if let Ok(entries) = std::fs::read_dir(base.join(source)) {
+            for entry in entries.flatten() {
+                if let Ok(meta) = entry.metadata() {
+                    if !meta.is_file() { continue; }
+                    out.files += 1;
+                    out.bytes = out.bytes.saturating_add(meta.len());
+                    if sub { out.rouman_bytes += meta.len(); } else { out.nhentai_bytes += meta.len(); }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn trim_cache(base: &std::path::Path, limit_bytes: u64) {
+    let mut files = Vec::<(std::time::SystemTime, u64, std::path::PathBuf)>::new();
+    let mut total = 0_u64;
+    for source in ["rouman", "nhentai"] {
+        if let Ok(entries) = std::fs::read_dir(base.join(source)) {
+            for entry in entries.flatten() {
+                if let Ok(m) = entry.metadata() {
+                    if !m.is_file() { continue; }
+                    total = total.saturating_add(m.len());
+                    files.push((m.modified().unwrap_or(std::time::UNIX_EPOCH), m.len(), entry.path()));
+                }
+            }
+        }
+    }
+    files.sort_unstable_by_key(|(modified, _, _)| *modified);
+    for (_, bytes, path) in files {
+        if total <= limit_bytes { break; }
+        if std::fs::remove_file(path).is_ok() { total = total.saturating_sub(bytes); }
+    }
+}
+
+fn is_image_bytes(data: &[u8]) -> bool {
+    data.starts_with(&[0xff, 0xd8, 0xff]) // JPEG
+        || data.starts_with(b"\x89PNG\r\n\x1a\n")
+        || (data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP")
+        || data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a")
+        || (data.len() >= 12 && &data[4..8] == b"ftyp" && (&data[8..12] == b"avif" || &data[8..12] == b"avis"))
+}
+
+#[command]
+fn image_cache_stats(app: tauri::AppHandle) -> Result<ImageCacheStats, String> {
+    Ok(cache_stats_at(&cache_dir(&app)?))
+}
+
+#[command]
+fn image_cache_clear(app: tauri::AppHandle) -> Result<ImageCacheStats, String> {
+    let base = cache_dir(&app)?;
+    // Delete only the dedicated image-cache-v1 directory; never touch reading progress.
+    if base.exists() { std::fs::remove_dir_all(&base).map_err(|e| format!("清除失敗：{e}"))?; }
+    Ok(cache_stats_at(&base))
+}
+
+#[command]
+fn image_cache_trim(app: tauri::AppHandle, limit_mb: u32) -> Result<ImageCacheStats, String> {
+    if !matches!(limit_mb, 500 | 1024 | 2048) { return Err("快取大小設定無效".into()); }
+    let base = cache_dir(&app)?;
+    trim_cache(&base, u64::from(limit_mb) * 1024 * 1024);
+    Ok(cache_stats_at(&base))
+}
+
+#[command]
+async fn image_cache_get(app: tauri::AppHandle, url: String, limit_mb: u32) -> Result<tauri::ipc::Response, String> {
+    if !matches!(limit_mb, 500 | 1024 | 2048) { return Err("快取大小設定無效".into()); }
+    let (target, source) = image_cache_url(&url)?;
+    let base = cache_dir(&app)?;
+    let dir = base.join(source);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("建立快取目錄失敗：{e}"))?;
+    let file = dir.join(format!("{}.image", cache_hash(target.as_str())));
+    if let Ok(bytes) = std::fs::read(&file) {
+        if bytes.len() <= IMAGE_CACHE_MAX_ITEM && is_image_bytes(&bytes) {
+            if let Ok(f) = std::fs::OpenOptions::new().write(true).open(&file) {
+                let _ = f.set_modified(std::time::SystemTime::now());
+            }
+            return Ok(tauri::ipc::Response::new(bytes));
+        }
+        let _ = std::fs::remove_file(&file);
+    }
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(25))
+        .user_agent("MangaHub/0.6.4 (opt-in image cache)")
+        .build().map_err(|e| e.to_string())?;
+    let mut response = client.get(target).send().await.map_err(|e| e.to_string())?;
+    if !response.status().is_success() { return Err(format!("圖片伺服器 HTTP {}", response.status())); }
+    if response.content_length().unwrap_or(0) > IMAGE_CACHE_MAX_ITEM as u64 { return Err("圖片過大".into()); }
+    if let Some(content_type) = response.headers().get(reqwest::header::CONTENT_TYPE) {
+        let value = content_type.to_str().unwrap_or("").to_ascii_lowercase();
+        if !value.starts_with("image/") && !value.starts_with("application/octet-stream") {
+            return Err("伺服器未回傳圖片".into());
+        }
+    }
+    let mut data = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        if data.len().saturating_add(chunk.len()) > IMAGE_CACHE_MAX_ITEM { return Err("圖片超出快取上限".into()); }
+        data.extend_from_slice(&chunk);
+    }
+    if !is_image_bytes(&data) { return Err("圖片格式無法驗證".into()); }
+    // Cache write failures should not prevent the image from being read.
+    let tmp = dir.join(format!("{}.partial", cache_hash(&url)));
+    if std::fs::write(&tmp, &data).is_ok() {
+        if std::fs::rename(&tmp, &file).is_ok() {
+            trim_cache(&base, u64::from(limit_mb) * 1024 * 1024);
+        } else { let _ = std::fs::remove_file(tmp); }
+    }
+    Ok(tauri::ipc::Response::new(data))
+}
+
+#[cfg(test)]
+mod image_cache_tests {
+    use super::*;
+    #[test]
+    fn allowed_image_urls_only() {
+        assert!(image_cache_url("https://v1.towm85.xyz/m/sample.jpg").is_ok());
+        assert!(image_cache_url("https://i.nhentai.net/galleries/123/1.jpg").is_ok());
+        assert!(image_cache_url("https://localhost/m/private.jpg").is_err());
+        assert!(image_cache_url("https://v1.towm85.xyz.evil.test/m/1.jpg").is_err());
+        assert!(image_cache_url("http://i.nhentai.net/galleries/1/1.jpg").is_err());
+    }
+    #[test]
+    fn image_sniffing() {
+        assert!(is_image_bytes(&[255, 216, 255, 0]));
+        assert!(!is_image_bytes(b"<html>oops</html>"));
+    }
+}
+
+
 #[command]
 async fn inspect_comicbox_chapter(url: String) -> Result<ChapterInfo, String> {
     let target = validate_chapter_url(&url)?;
@@ -1236,7 +1403,7 @@ async fn inspect_rouman_book(book_id: String) -> Result<RoumanBookDetails, Strin
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![search_rouman_catalog, browse_rouman_catalog, inspect_rouman_book, inspect_rouman_chapter, inspect_comicbox_chapter, probe_comicbox_image, probe_comicbox_pair, fetch_nh_gallery, browse_nh_catalog, list_nh_taxonomy, random_nh_gallery, related_nh_galleries, nh_connect, nh_disconnect, nh_session, nh_account_favorites, nh_account_blacklist, nh_account_random_favorite, nh_toggle_remote_favorite, nh_gallery_comments])
+        .invoke_handler(tauri::generate_handler![image_cache_trim, image_cache_get, image_cache_clear, image_cache_stats, search_rouman_catalog, browse_rouman_catalog, inspect_rouman_book, inspect_rouman_chapter, inspect_comicbox_chapter, probe_comicbox_image, probe_comicbox_pair, fetch_nh_gallery, browse_nh_catalog, list_nh_taxonomy, random_nh_gallery, related_nh_galleries, nh_connect, nh_disconnect, nh_session, nh_account_favorites, nh_account_blacklist, nh_account_random_favorite, nh_toggle_remote_favorite, nh_gallery_comments])
         .run(tauri::generate_context!())
         .expect("error while running MangaHub");
 }

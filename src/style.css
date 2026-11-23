@@ -299,3 +299,10 @@ button:disabled{opacity:.45;cursor:not-allowed}
 
 /* v0.6.3: preserve the height of recycled pages without retaining image/Canvas pixels. */
 .mh-recycled-placeholder{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;background:#0b0c10;color:#858998;padding:12px;}
+
+/* v0.6.4: opt-in on-device image cache controls */
+.mh-reader-cache-settings { display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:12px 15px; margin:10px 0 18px; border:1px solid rgba(150,150,180,.18); border-radius:12px; background:rgba(115,110,145,.08); }
+.mh-reader-cache-settings label { display:flex; flex-wrap:wrap; align-items:center; gap:8px; font-size:13px; }
+.mh-reader-cache-settings select { max-width:175px; padding:7px; background:#22222c; color:#eee; border:1px solid #555; border-radius:7px; }
+.mh-reader-cache-settings > span {font-size:12px; color:#aaa;}
+.mh-reader-cache-settings > small {flex-basis:100%; font-size:11px; color:#aaa;}

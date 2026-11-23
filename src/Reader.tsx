@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, ArrowLeft, ChevronLeft, ChevronRight, ImagePlus, RotateCcw, Trash2, ZoomOut } from 'lucide-react';
 import { drawRoumanImage, needsRoumanStripRepair } from './roumanStripRepair';
+import { invoke } from '@tauri-apps/api/core';
 
 type ReadingMode = 'vertical' | 'ltr' | 'rtl';
 type PageStatus = 'idle' | 'loading' | 'ready' | 'failed';
@@ -8,6 +9,10 @@ type PageSource = { url: string; label: string };
 const STORAGE_URLS = 'mh-image-urls';
 const STORAGE_MODE = 'mh-v03-mode';
 const STORAGE_PROGRESS = 'mh-v03-reading-progress';
+const STORAGE_CACHE_LIMIT = 'mh-v064-image-cache-limit';
+type CacheStats = { bytes: number; files: number; roumanBytes: number; nhentaiBytes: number };
+const mb = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+const cacheSupported = (url: string) => { try { const u = new URL(url); return u.protocol === 'https:' && ((/^v[1-4]\.towm85\.xyz$/.test(u.hostname) && u.pathname.startsWith('/m/')) || (u.hostname === 'i.nhentai.net' && u.pathname.startsWith('/galleries/'))); } catch { return false; } };
 const safeRead = (key: string, fallback: string) => { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } };
 const isSupportedHttps = (s: string) => {
   try { const url = new URL(s); return url.protocol === 'https:' && !url.username && !url.password; }
@@ -25,7 +30,7 @@ const hashList = (urls: string[]) => {
 const knownPageSizes = new Map<string, { width: number; height: number }>();
 const READER_PREFETCH_MARGIN = '1400px 0px 1400px 0px';
 
-function ReaderImage({ src, index, eager }: { src: string; index: number; eager: boolean }) {
+function ReaderImage({ src, index, eager, cacheLimitMb }: { src: string; index: number; eager: boolean; cacheLimitMb: number }) {
   const node = useRef<HTMLDivElement>(null);
   const canvasNode = useRef<HTMLCanvasElement | null>(null);
   // Release the backing bitmap as soon as a recycled page's canvas unmounts.
@@ -37,6 +42,8 @@ function ReaderImage({ src, index, eager }: { src: string; index: number; eager:
     canvasNode.current = next;
   }, []);
   const repairStrips = needsRoumanStripRepair(src);
+  const cacheEnabled = cacheLimitMb > 0 && cacheSupported(src);
+  const [displaySrc, setDisplaySrc] = useState<string | null>(() => cacheEnabled ? null : src);
   const [state, setState] = useState<PageStatus>('idle');
   const [attempt, setAttempt] = useState(0);
   const [active, setActive] = useState(eager);
@@ -62,6 +69,22 @@ function ReaderImage({ src, index, eager }: { src: string; index: number; eager:
   }, [src, eager]);
 
   useEffect(() => { if (!active) setState('idle'); }, [active]);
+  useEffect(() => {
+    if (!active) { setDisplaySrc(null); return; }
+    if (!cacheEnabled) { setDisplaySrc(src); return; }
+    let disposed = false;
+    let objectUrl: string | null = null;
+    setDisplaySrc(null);
+    invoke<ArrayBuffer>('image_cache_get', { url: src, limitMb: cacheLimitMb })
+      .then(result => {
+        if (disposed) return;
+        const bytes: ArrayBuffer = result instanceof ArrayBuffer ? result : (new Uint8Array(result as unknown as number[]).buffer as ArrayBuffer);
+        objectUrl = URL.createObjectURL(new Blob([bytes]));
+        setDisplaySrc(objectUrl);
+      })
+      .catch(() => { if (!disposed) setDisplaySrc(src); }); // Preserve v0.6.3 direct image loading as fallback.
+    return () => { disposed = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [active, cacheEnabled, cacheLimitMb, src]);
 
   const handleLoad = (image: HTMLImageElement) => {
     const width = image.naturalWidth, height = image.naturalHeight;
@@ -81,13 +104,13 @@ function ReaderImage({ src, index, eager }: { src: string; index: number; eager:
 
   // For recycled pages use their natural aspect ratio instead of an empty
   // fixed-height slot; this keeps scroll offset and saved page numbers stable.
-  const placeholderStyle: React.CSSProperties | undefined = !active
+  const placeholderStyle: React.CSSProperties | undefined = (!active || !displaySrc)
     ? (size ? { aspectRatio: `${size.width} / ${size.height}` } : { minHeight: 420 })
     : undefined;
 
   return <div className="mh-image-slot" ref={node} data-page={index + 1} style={placeholderStyle}>
-    {active ? <>
-      <img key={`${src}-${attempt}`} src={src} loading="eager" decoding="async"
+    {active && displaySrc ? <>
+      <img key={`${src}-${attempt}-${displaySrc}`} src={displaySrc} loading="eager" decoding="async"
         referrerPolicy="no-referrer" alt={`漫畫第 ${index + 1} 頁`}
         // Preserve the original image's layout height; Rouman5's repaired
         // canvas overlays it without altering the verified strip algorithm.
@@ -96,7 +119,7 @@ function ReaderImage({ src, index, eager }: { src: string; index: number; eager:
         onError={() => setState('failed')}/>
       {repairStrips && <canvas ref={attachCanvas} aria-label={`漫畫第 ${index + 1} 頁`}
         role="img" style={{ position: 'absolute', inset: 0, display: state === 'ready' ? 'block' : 'none', width: '100%', height: '100%' }}/>} 
-    </> : <div className="mh-placeholder mh-recycled-placeholder">第 {index + 1} 頁 · 捲動時載入</div>}
+    </> : <div className="mh-placeholder mh-recycled-placeholder">第 {index + 1} 頁 · {active ? '讀取快取中' : '捲動時載入'}</div>}
     {active && state === 'failed' && <div className="mh-load-error"><AlertCircle size={19}/><strong>第 {index + 1} 頁載入失敗</strong><small>可能是網路暫時中斷、來源限制或圖片格式問題。</small><button onClick={() => { setState('loading'); setAttempt(n => n + 1); }}><RotateCcw size={15}/> 重試</button></div>}
   </div>;
 }
@@ -113,6 +136,20 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
   const localUrls = useRef<string[]>([]);
   const [page, setPage] = useState(() => Math.max(0, (resumePage ?? 1) - 1));
   const [zoom, setZoom] = useState(100);
+  const [cacheLimitMb, setCacheLimitMb] = useState(() => { const n = Number(safeRead(STORAGE_CACHE_LIMIT, '0')); return [0, 500, 1024, 2048].includes(n) ? n : 0; });
+  const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
+  const [cacheMessage, setCacheMessage] = useState('');
+  const refreshCacheStats = useCallback(() => { invoke<CacheStats>('image_cache_stats').then(setCacheStats).catch(() => setCacheStats(null)); }, []);
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_CACHE_LIMIT, String(cacheLimitMb)); } catch { /* storage disabled */ }
+    if (cacheLimitMb > 0) invoke<CacheStats>('image_cache_trim', { limitMb: cacheLimitMb }).then(setCacheStats).catch(refreshCacheStats);
+    else refreshCacheStats();
+  }, [cacheLimitMb, refreshCacheStats]);
+  const clearImageCache = async () => {
+    if (!window.confirm('確定清除磁碟圖片快取？收藏與閱讀進度不會刪除。')) return;
+    try { setCacheStats(await invoke<CacheStats>('image_cache_clear')); setCacheMessage('圖片快取已清除'); }
+    catch (error) { setCacheMessage(`清除失敗：${String(error)}`); }
+  };
   const [scrollPage, setScrollPage] = useState(() => Math.max(0, (resumePage ?? 1) - 1));
   const restoring = useRef(false);
   const restoreTimer = useRef<number | null>(null);
@@ -265,9 +302,19 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
       <button className="toggle" onClick={() => setZoom(100)}><ZoomOut size={14}/> 重設</button>
       {localPages.length > 0 && <button className="toggle" onClick={clearLocal}><Trash2 size={14}/> 清除本機圖片</button>}
     </div>}
+    {sources.length > 0 && <div className="mh-reader-cache-settings">
+      <label>圖片磁碟快取 <select aria-label="圖片快取容量" value={cacheLimitMb} onChange={e => { setCacheLimitMb(Number(e.currentTarget.value)); setCacheMessage(''); }}>
+        <option value={0}>關閉（預設）</option><option value={500}>500 MB</option><option value={1024}>1 GB</option><option value={2048}>2 GB</option>
+      </select></label>
+      <span>{cacheStats ? `已使用 ${mb(cacheStats.bytes)} · Rouman5 ${mb(cacheStats.roumanBytes)} · nHentai ${mb(cacheStats.nhentaiBytes)} · ${cacheStats.files} 張` : '快取容量未取得'}</span>
+      <button className="toggle" onClick={refreshCacheStats}>更新容量</button>
+      <button className="toggle" onClick={clearImageCache}><Trash2 size={14}/> 清除圖片快取</button>
+      <small>僅在您有權保存圖片時啟用；關閉後直接從來源網站載入。清除快取不影響閱讀進度。</small>
+      {cacheMessage && <small role="status">{cacheMessage}</small>}
+    </div>}
     {sources.length === 0 ? <div className="empty"><ImagePlus size={34}/><h2>等待圖片</h2><p>可選取自己的漫畫圖片，或貼上有權存取的 HTTPS 圖片網址。</p></div> : mode === 'vertical' ?
       <div ref={scroller} className="scrollReader mh-scroll-reader" style={{ '--reader-width': `${zoom}%` } as React.CSSProperties}>
-        {sources.map((item, i) => <ReaderImage key={`${item.url}-${i}`} src={item.url} index={i} eager={false} />)}
+        {sources.map((item, i) => <ReaderImage key={`${item.url}-${i}`} src={item.url} index={i} eager={false} cacheLimitMb={cacheLimitMb} />)}
       </div> : <div className="singleReader mh-single-reader">
         <div className="pager">
           <button disabled={current === 0} onClick={() => goTo(current - 1)}><ChevronLeft size={16}/> 上一頁</button>
@@ -275,7 +322,7 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
           <button disabled={current === sources.length - 1} onClick={() => goTo(current + 1)}>下一頁 <ChevronRight size={16}/></button>
         </div>
         <div className="mh-single-image" style={{ '--single-zoom': `${zoom}%` } as React.CSSProperties}>
-          <ReaderImage key={`${current}-${sources[current].url}`} src={sources[current].url} index={current} eager />
+          <ReaderImage key={`${current}-${sources[current].url}`} src={sources[current].url} index={current} eager cacheLimitMb={cacheLimitMb} />
         </div>
         <p className="mh-help">方向鍵可翻頁（右至左模式會反轉方向）。圖片若因來源站限制無法直接載入，請使用合法提供的圖片檔案。</p>
       </div>}
