@@ -346,3 +346,27 @@ button, input, select, textarea { touch-action: manipulation; }
   .roumanDetailBody { flex-basis:180px; }
 }
 @media (prefers-reduced-motion: reduce) { .catalogCard,.roumanCard,.sidebar { transition:none !important; } }
+
+/* v0.6.5.1 — iOS immersive controls, scroll-aware dock, edge navigation. */
+@media (max-width:750px) {
+  .reader-active .readerContent { transition:padding-bottom .22s ease; }
+  .mh-mobile-reader-dock { transition:transform .22s ease, opacity .2s ease, visibility .22s ease; will-change:transform; }
+  .reader-dock-hidden .mh-mobile-reader-dock,
+  .reader-focus .mh-mobile-reader-dock { transform:translate3d(0,110%,0); opacity:0; visibility:hidden; pointer-events:none; }
+  .reader-active .readerContent.reader-dock-hidden, .reader-active .readerContent.reader-focus { padding-bottom:calc(12px + var(--mh-safe-bottom)); }
+  /* Focus mode removes all reading chrome. Tap the comic itself to restore. */
+  .reader-focus > .readerReturnBar, .reader-focus > .mh-reader-focus-toggle,
+  .reader-focus > .readerTools, .reader-focus > .mh-reader-settings,
+  .reader-focus > .mh-reader-cache-settings, .reader-focus > .detailNote,
+  .reader-focus > .pill, .reader-focus > h1, .reader-focus > .readerGalleryTitle { display:none !important; }
+  .reader-active .readerContent.reader-focus { padding:0 0 var(--mh-safe-bottom) !important; }
+  .reader-focus .mh-scroll-reader, .reader-focus .mh-single-reader { margin:0; max-width:none; width:100%; }
+  .reader-focus .mh-scroll-reader .mh-image-slot { max-width:none; width:100%; }
+  .reader-focus .mh-single-image { width:100%; max-width:none; }
+  .reader-focus .mh-single-reader .pager, .reader-focus .mh-single-reader .mh-help { display:none; }
+  .reader-focus .mh-single-reader .mh-single-image .mh-image-slot > img { max-height:calc(100dvh - var(--mh-safe-top) - var(--mh-safe-bottom)); }
+  .mh-scroll-reader, .mh-single-image { -webkit-tap-highlight-color:transparent; }
+}
+@media (max-width:750px) and (prefers-reduced-motion:reduce) {
+  .mh-mobile-reader-dock, .reader-active .readerContent { transition:none; }
+}
