@@ -5,7 +5,10 @@ on:
 jobs:
   ios-unsigned:
     runs-on: macos-15
-    timeout-minutes: 90
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,14 +20,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: 'src-tauri -> target'
+      - name: Record build environment
+        shell: bash
+        run: |
+          mkdir -p ios-build-logs
+          {
+            xcodebuild -version
+            xcode-select -p
+            rustc --version
+            cargo --version
+            node --version
+          } 2>&1 | tee ios-build-logs/environment.log
       - name: Install dependencies
-        run: npm install
+        run: npm ci || npm install
       - name: Initialize iOS project
         run: npm run tauri ios init -- --ci
-      # Force Xcode signing off for the whole archive build, not only Tauri's
-      # export stage. The xcconfig applies to xcodebuild launched by Tauri.
-      # No Apple credentials are needed here: Sideloadly signs the finished IPA.
-      - name: Configure unsigned Xcode archive
+      - name: Prepare unsigned Xcode archive settings
         shell: bash
         run: |
           cat > "$RUNNER_TEMP/mangahub-unsigned.xcconfig" <<'XCCONFIG'
@@ -34,14 +45,37 @@ jobs:
           CODE_SIGN_STYLE = Manual
           DEVELOPMENT_TEAM =
           XCCONFIG
-      - name: Build unsigned iOS archive
-        env:
-          XCODE_XCCONFIG_FILE: ${{ runner.temp }}/mangahub-unsigned.xcconfig
+      - name: Check iOS Rust library before Xcode archive
         shell: bash
         run: |
-          set -euo pipefail
-          npm run tauri ios build -- --target aarch64 --no-sign --archive-only --ci
-
+          set -o pipefail
+          cargo check --manifest-path src-tauri/Cargo.toml --target aarch64-apple-ios --lib -v 2>&1 | tee ios-build-logs/cargo-check.log
+      - name: Build unsigned iOS archive
+        shell: bash
+        env:
+          XCODE_XCCONFIG_FILE: ${{ runner.temp }}/mangahub-unsigned.xcconfig
+        run: |
+          set -o pipefail
+          npm run tauri ios build -- --target aarch64 --no-sign --archive-only --ci -v 2>&1 | tee ios-build-logs/tauri-ios-archive.log
+      - name: Collect native Xcode diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p ios-build-logs/xcode
+          find "$HOME/Library/Developer/Xcode/DerivedData" -type f \( -name '*.xcactivitylog' -o -name '*.xcresult' \) -print 2>/dev/null | head -30 > ios-build-logs/xcode-paths.txt || true
+          # Xcode activity logs are saved intact for offline inspection.
+          while IFS= read -r path; do
+            [ -f "$path" ] || continue
+            cp "$path" "ios-build-logs/xcode/$(basename "$(dirname "$path")")-$(basename "$path")" || true
+          done < ios-build-logs/xcode-paths.txt
+      - name: Upload diagnostics even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MangaHub-iOS-Build-Logs
+          path: ios-build-logs/
+          if-no-files-found: warn
+          retention-days: 14
       - name: Create unsigned IPA for Sideloadly
         shell: bash
         run: |
@@ -52,9 +86,7 @@ jobs:
           fi
           mkdir -p ipa/Payload
           ditto "$APP" "ipa/Payload/$(basename "$APP")"
-          cd ipa
-          zip -qry ../MangaHub-iOS-unsigned.ipa Payload
-          cd ..
+          ( cd ipa && zip -qry ../MangaHub-iOS-unsigned.ipa Payload )
           unzip -t MangaHub-iOS-unsigned.ipa | tail -2
       - uses: actions/upload-artifact@v4
         with:
