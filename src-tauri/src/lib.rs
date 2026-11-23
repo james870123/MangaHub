@@ -1104,17 +1104,35 @@ async fn browse_rouman_catalog(mode: String, page: u32) -> Result<RoumanCatalog,
         }
         // Some site revisions expose the section as a dedicated public link.
         // Reject off-site links, unexpected paths, and redirects.
-        let document = Html::parse_document(&home);
-        let anchor_selector = Selector::parse("a[href]").map_err(|e| e.to_string())?;
-        for anchor in document.select(&anchor_selector) {
-            let label = anchor.text().collect::<String>();
-            if !label.contains("新上架") && !label.contains("最新上架") { continue; }
-            let Some(href) = anchor.value().attr("href") else { continue; };
-            let Ok(url) = Url::parse("https://rouman5.com/home").unwrap().join(href) else { continue; };
-            if url.scheme() != "https" || url.host_str() != Some("rouman5.com")
-                || url.port().is_some() || !url.username().is_empty()
-                || url.fragment().is_some() || url.path() == "/home"
-                || !(url.path().starts_with("/books") || url.path().starts_with("/new")) { continue; }
+        // IMPORTANT: `scraper::ElementRef` is !Send. Collect owned URLs and
+        // drop the HTML document/selectors before awaiting network requests.
+        let candidate_urls: Vec<Url> = {
+            let document = Html::parse_document(&home);
+            let anchor_selector = Selector::parse("a[href]").map_err(|e| e.to_string())?;
+            let base = Url::parse("https://rouman5.com/home").map_err(|e| e.to_string())?;
+            let mut urls = Vec::new();
+            for anchor in document.select(&anchor_selector) {
+                let label = anchor.text().collect::<String>();
+                if !label.contains("新上架") && !label.contains("最新上架") {
+                    continue;
+                }
+                let Some(href) = anchor.value().attr("href") else { continue; };
+                let Ok(url) = base.join(href) else { continue; };
+                if url.scheme() != "https"
+                    || url.host_str() != Some("rouman5.com")
+                    || url.port().is_some()
+                    || !url.username().is_empty()
+                    || url.fragment().is_some()
+                    || url.path() == "/home"
+                    || !(url.path().starts_with("/books") || url.path().starts_with("/new"))
+                {
+                    continue;
+                }
+                if !urls.contains(&url) { urls.push(url); }
+            }
+            urls
+        };
+        for url in candidate_urls {
             let html = rouman_html(url).await?;
             let mut list = parse_rouman_catalog(&html, "new", 0);
             if !list.books.is_empty() {
