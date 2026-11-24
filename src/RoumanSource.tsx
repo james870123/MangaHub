@@ -32,6 +32,109 @@ function progressOf(c: RoumanChapter, records: PageProgress) { return records[`$
 function pageText(c: RoumanChapter, records: PageProgress) { const p = progressOf(c, records); return p ? `${c.chapterTitle} · 第 ${p.page} / ${p.total} 頁` : c.chapterTitle; }
 function displayTitle(title: string) { return title.trim() || '未命名作品'; }
 
+// Keep catalog cover fallbacks separate from favorites and reading progress.
+const coverStoreKey = 'mangahub-rouman-catalog-cover-v067';
+const coverStoreLimit = 250;
+type CoverIndex = Record<string, string>;
+function readCoverIndex(): CoverIndex {
+  const value = saved<unknown>(coverStoreKey, {});
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const index: CoverIndex = {};
+  for (const [id, url] of Object.entries(value)) {
+    if (/^[a-zA-Z0-9-]{8,80}$/.test(id) && typeof url === 'string' && isHttpsCover(url)) index[id] = url;
+  }
+  return index;
+}
+function isHttpsCover(value: string): boolean {
+  try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password; }
+  catch { return false; }
+}
+const coverIndex = readCoverIndex();
+function rememberCover(id: string, url: string): void {
+  if (!/^[a-zA-Z0-9-]{8,80}$/.test(id) || !isHttpsCover(url)) return;
+  delete coverIndex[id];
+  coverIndex[id] = url;
+  const all = Object.entries(coverIndex);
+  if (all.length > coverStoreLimit) {
+    for (const [oldId] of all.slice(0, all.length - coverStoreLimit)) delete coverIndex[oldId];
+  }
+  try { localStorage.setItem(coverStoreKey, JSON.stringify(coverIndex)); } catch { /* storage may be full or unavailable */ }
+}
+// Limit metadata lookups when several missing covers become visible together.
+const coverTasks: Array<() => void> = [];
+let activeCoverTasks = 0;
+function pumpCoverTasks(): void {
+  while (activeCoverTasks < 2 && coverTasks.length) {
+    const task = coverTasks.shift();
+    if (task) { activeCoverTasks++; task(); }
+  }
+}
+function enqueueCoverTask<T>(job: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    coverTasks.push(() => { void job().then(resolve, reject).finally(() => { activeCoverTasks--; pumpCoverTasks(); }); });
+    pumpCoverTasks();
+  });
+}
+const pendingCoverLookups = new Map<string, Promise<string | null>>();
+function lookupBookCover(id: string): Promise<string | null> {
+  const cached = coverIndex[id];
+  if (cached) return Promise.resolve(cached);
+  const pending = pendingCoverLookups.get(id);
+  if (pending) return pending;
+  const promise = enqueueCoverTask(async () => {
+    const detail = await invoke<BookDetail>('inspect_rouman_book', { bookId: id });
+    const url = detail.coverUrl;
+    if (url && isHttpsCover(url)) { rememberCover(id, url); return url; }
+    return null;
+  }).finally(() => { pendingCoverLookups.delete(id); });
+  pendingCoverLookups.set(id, promise);
+  return promise;
+}
+
+function CatalogCover({ card, enabled, open, disabled }: {
+  card: Card; enabled: boolean; open: () => void; disabled: boolean;
+}) {
+  const [source, setSource] = useState<string | null>(() => coverIndex[card.id] ?? card.coverUrl);
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const [inView, setInView] = useState(false);
+  const containerRef = useRef<HTMLButtonElement | null>(null);
+  const lookupAttemptRef = useRef(false);
+  useEffect(() => {
+    lookupAttemptRef.current = false;
+    setFailedUrl(null);
+    setSource(coverIndex[card.id] ?? card.coverUrl);
+  }, [card.id, card.coverUrl]);
+  useEffect(() => {
+    if (!enabled) return;
+    const element = containerRef.current;
+    if (!element) return;
+    if (typeof IntersectionObserver === 'undefined') { setInView(true); return; }
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting) { setInView(true); observer.disconnect(); }
+    }, { rootMargin: '250px' });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [enabled, card.id]);
+  useEffect(() => {
+    if (!enabled || !inView || lookupAttemptRef.current) return;
+    if (source && failedUrl !== source) return;
+    lookupAttemptRef.current = true;
+    let cancelled = false;
+    void lookupBookCover(card.id).then(url => {
+      if (!cancelled && url && url !== failedUrl) { setSource(url); setFailedUrl(null); }
+    }).catch(() => { /* fallback icon remains; do not block catalog */ });
+    return () => { cancelled = true; };
+  }, [enabled, inView, card.id, source, failedUrl]);
+  const displaySource = enabled && source && failedUrl !== source ? source : null;
+  return <button ref={containerRef} className="roumanCoverButton" disabled={disabled} onClick={open} aria-label={`查看 ${card.title}`}>
+    {displaySource ? <img src={displaySource} loading="lazy" alt="" onLoad={() => rememberCover(card.id, displaySource)} onError={() => {
+      // Do not cache an invalid catalog URL, and retry via the detail page once.
+      if (coverIndex[card.id] === displaySource) { delete coverIndex[card.id]; try { localStorage.setItem(coverStoreKey, JSON.stringify(coverIndex)); } catch { /* ignore */ } }
+      setFailedUrl(displaySource);
+    }}/> : <BookOpen size={30}/>}
+  </button>;
+}
+
 export default function RoumanSource({ onRead, active, nhHistory, onOpenNh, pageProgress }: Props) {
   const [mode, setMode] = useState<Mode>('home');
   const [page, setPage] = useState(0);
@@ -52,7 +155,6 @@ export default function RoumanSource({ onRead, active, nhHistory, onOpenNh, page
   const [favorites, setFavorites] = useState<Card[]>(() => saved<Card[]>(favKey, []));
   const [recent, setRecent] = useState<RoumanChapter[]>(() => saved<RoumanChapter[]>(recentKey, []));
   const [showFavorites, setShowFavorites] = useState(false);
-  const [badCovers, setBadCovers] = useState<string[]>([]);
   const [showCovers, setShowCovers] = useState(() => saved<boolean>('mh-v05-show-covers', false));
   const [sectionFilter, setSectionFilter] = useState('all');
   // Save the catalog position while a book is open; do not reset it on Reader return.
@@ -130,6 +232,7 @@ export default function RoumanSource({ onRead, active, nhHistory, onOpenNh, page
     setBusy(true); setError(''); setChapterSearch('');
     try {
       const book = await invoke<BookDetail>('inspect_rouman_book', { bookId: id });
+      if (book.coverUrl) rememberCover(book.id, book.coverUrl);
       setDetail(book); setChapter(null);
       // Keep the existing catalog mounted: returning to it won't reset filters or pagination.
     } catch (e) { pendingDetailFocusRef.current = null; setError(String(e)); }
@@ -225,8 +328,7 @@ export default function RoumanSource({ onRead, active, nhHistory, onOpenNh, page
       const cards = visible.filter(card => (mode !== 'home' || showFavorites || order !== 'site') || card.section === group);
       return <div key={group} className="roumanSection"><h2>{group} <small>{cards.length} 部</small></h2>
         <div className="roumanGrid">{cards.map((card, i) => <article className="roumanCard" key={`${group}:${card.id}:${i}`}>
-          <button className="roumanCoverButton" disabled={busy} onClick={() => void openBook(card.id)} aria-label={`查看 ${card.title}`}>
-            {showCovers && card.coverUrl && !badCovers.includes(card.id) ? <img src={card.coverUrl} loading="lazy" alt="" onError={() => setBadCovers(p => p.includes(card.id) ? p : [...p, card.id])}/> : <BookOpen size={30}/>}</button>
+          <CatalogCover card={card} enabled={showCovers} disabled={busy} open={() => void openBook(card.id)}/>
           <div className="roumanCardInfo"><button className="roumanTitle" title={card.title} onClick={() => void openBook(card.id)}>{displayTitle(card.title)}</button>
             <div className="roumanCardBottom"><small>{card.section}</small><button aria-label={isSaved(card.id) ? '取消收藏' : '收藏作品'} aria-pressed={isSaved(card.id)} className="roumanHeart" onClick={() => changeFavorite(card)}><Heart size={17} fill={isSaved(card.id) ? 'currentColor' : 'none'}/></button></div></div>
         </article>)}</div></div>;
