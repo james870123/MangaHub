@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { BookOpen, Clock3, Heart, Library, Search, Trash2, RefreshCw, BellDot, CheckCheck } from 'lucide-react';
 import type { CatalogItem, ReadingRecord } from './NhCatalog';
@@ -8,11 +8,36 @@ type RoumanFav = { id: string; title: string; coverUrl: string | null; section: 
 type Progress = Record<string, {page:number;total:number;updatedAt:number}>;
 type Source = 'all' | 'nh' | 'rouman';
 type ChapterLink = { index:number; name:string; url:string };
-type BookDetail = { id:string; title:string; chapters:ChapterLink[] };
+type BookDetail = { id:string; title:string; coverUrl?:string|null; chapters:ChapterLink[] };
+type NhDetail = { coverUrl?:string|null };
 type UpdateRecord = { chapterIndex:number; chapterCount:number; checkedAt:number; unseen:number; latestChapter:string };
 type UpdateRecordMap = Record<string,UpdateRecord>;
 const updateKey='mangahub-rouman-chapter-updates-v066';
 const perCheckLimit=20;
+const coverRepairKey='mangahub-shelf-cover-overrides-v066';
+const maxAutoCoverChecks=8;
+const maxManualCoverChecks=20;
+function loadCoverOverrides():Record<string,string> {
+  try {
+    const val:unknown=JSON.parse(localStorage.getItem(coverRepairKey)||'{}');
+    if(!val || typeof val!=='object' || Array.isArray(val)) return {};
+    return Object.fromEntries(Object.entries(val).filter(([key,url])=>
+      /^(nh|rouman):/.test(key) && typeof url==='string' && /^https:\/\//i.test(url)));
+  }catch{return {};}
+}
+function safeCoverUrl(url:unknown):string|null {
+  if(typeof url!=='string') return null;
+  try { const parsed=new URL(url); return parsed.protocol==='https:' ? parsed.href : null; }
+  catch { return null; }
+}
+function ShelfCoverImage({url,source,title,onError}:{url:string|null;source:'nh'|'rouman';title:string;onError:()=>void}) {
+  const [broken,setBroken]=useState(false);
+  useEffect(()=>setBroken(false),[url]);
+  if(!url||broken) return <BookOpen size={32} aria-label="尚無可顯示的封面"/>;
+  return <img src={url} alt={`${title} 封面`} loading="lazy"
+    referrerPolicy={source==='nh'?'no-referrer':undefined}
+    onError={()=>{setBroken(true);onError();}}/>;
+}
 function loadUpdates():UpdateRecordMap {
   try { const val:unknown=JSON.parse(localStorage.getItem(updateKey)||'{}'); return val && typeof val==='object' && !Array.isArray(val) ? val as UpdateRecordMap : {}; }
   catch { return {}; }
@@ -40,6 +65,42 @@ export default function UnifiedShelf({ nhFavorites, nhHistory, roumanPages, onOp
   const [nextBatch,setNextBatch]=useState(0);
   const [onlyUpdates,setOnlyUpdates]=useState(false);
   const [failedIds,setFailedIds]=useState<string[]>([]);
+  const [coverOverrides,setCoverOverrides]=useState<Record<string,string>>(loadCoverOverrides);
+  const [failedCovers,setFailedCovers]=useState<string[]>([]);
+  const [coverStatus,setCoverStatus]=useState('');
+  const [repairingCovers,setRepairingCovers]=useState(false);
+  const [coverRetries,setCoverRetries]=useState<Record<string,number>>({});
+  const coverAttempted=useRef(new Set<string>());
+  const mounted=useRef(true);
+  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
+  const repairCover=useCallback(async(key:string):Promise<boolean>=>{
+    if(coverAttempted.current.has(key)) return false;
+    coverAttempted.current.add(key);
+    const [source,id]=key.split(':',2);
+    try {
+      let cover:string|null=null;
+      if(source==='rouman') {
+        const result=await invoke<BookDetail>('inspect_rouman_book',{bookId:id});
+        cover=safeCoverUrl(result.coverUrl);
+      } else if(source==='nh' && /^\d+$/.test(id)) {
+        const result=await invoke<NhDetail>('fetch_nh_gallery',{input:id});
+        cover=safeCoverUrl(result.coverUrl);
+      }
+      if(!cover) throw new Error('來源未提供有效 HTTPS 封面網址');
+      if(!mounted.current) return false;
+      setCoverOverrides(previous=>{
+        const next={...previous,[key]:cover!};
+        try{localStorage.setItem(coverRepairKey,JSON.stringify(next));}catch{/* Storage quota/private mode */}
+        return next;
+      });
+      setFailedCovers(previous=>previous.filter(x=>x!==key));
+      return true;
+    }catch{
+      if(mounted.current) setFailedCovers(previous=>previous.includes(key)?previous:[...previous,key]);
+      return false;
+    }finally{coverAttempted.current.delete(key);}
+  },[]);
+
   // The shelf is mounted when opened; read the same legacy keys as the source pages.
   // No migration and no destructive write are necessary.
   const [roumanFavorites]=useState(()=>loadList<RoumanFav>('mangahub-rouman-favorites-v059'));
@@ -90,20 +151,20 @@ export default function UnifiedShelf({ nhFavorites, nhHistory, roumanPages, onOp
   const items=useMemo(()=>{
     const map=new Map<string,ShelfItem>();
     for(const f of nhFavorites) map.set('nh:'+f.id,{
-      key:'nh:'+f.id,source:'nh',id:String(f.id),title:f.title,cover:f.coverUrl??null,saved:true,time:0,
+      key:'nh:'+f.id,source:'nh',id:String(f.id),title:f.title,cover:coverOverrides['nh:'+f.id]??f.coverUrl??null,saved:true,time:0,
       description:'已收藏',updates:0,open:()=>onOpenNh(f.id),remove:()=>onRemoveNh(f.id)
     });
     for(const r of nhHistory){const key='nh:'+r.id;const old=map.get(key);
       map.set(key,{key,source:'nh',id:String(r.id),title:r.title||old?.title||`#${r.id}`,
-        cover:r.coverUrl??old?.cover??null,saved:!!old?.saved,time:r.updatedAt||0,
+        cover:coverOverrides[key]??r.coverUrl??old?.cover??null,saved:!!old?.saved,time:r.updatedAt||0,
         description:`第 ${r.page||1} / ${r.total||'?'} 頁`,updates:0,open:()=>onOpenNh(r.id),remove:()=>onRemoveNh(r.id) });}
     for(const f of roumanFavorites) map.set('rouman:'+f.id,{
-      key:'rouman:'+f.id,source:'rouman',id:f.id,title:f.title,cover:f.coverUrl,saved:true,time:0,
+      key:'rouman:'+f.id,source:'rouman',id:f.id,title:f.title,cover:coverOverrides['rouman:'+f.id]??f.coverUrl,saved:true,time:0,
       description:'已收藏',updates:updates[f.id]?.unseen??0,open:()=>onShowRouman(f.id),remove:()=>onRemoveRouman(f.id)
     });
     for(const r of roumanHistory){const key='rouman:'+r.bookId;const old=map.get(key);
       const record=roumanPages[`${r.bookId}:${r.chapterId||r.chapterIndex}`];
-      map.set(key,{key,source:'rouman',id:r.bookId,title:r.bookTitle||old?.title||r.bookId,cover:old?.cover??null,
+      map.set(key,{key,source:'rouman',id:r.bookId,title:r.bookTitle||old?.title||r.bookId,cover:coverOverrides[key]??old?.cover??null,
         saved:!!old?.saved,time:Math.max(r.visitedAt||0,record?.updatedAt||0),
         description:`${r.chapterTitle}${record?` · 第 ${record.page} / ${record.total} 頁`:''}`,updates:updates[r.bookId]?.unseen??0,
         open:()=>onOpenRouman(r.url),remove:()=>onRemoveRouman(r.bookId)
@@ -112,7 +173,39 @@ export default function UnifiedShelf({ nhFavorites, nhHistory, roumanPages, onOp
     return [...map.values()].filter(x=>(source==='all'||x.source===source) &&
       (kind==='all'||(kind==='saved'?x.saved:x.time>0)) && (!onlyUpdates||x.updates>0) && x.title.toLocaleLowerCase().includes(needle))
       .sort((a,b)=>sort==='title'?a.title.localeCompare(b.title):(b.time-a.time||a.title.localeCompare(b.title)));
-  },[nhFavorites,nhHistory,roumanFavorites,roumanHistory,roumanPages,onOpenNh,onOpenRouman,onShowRouman,onRemoveNh,onRemoveRouman,source,kind,sort,search,updates,onlyUpdates]);
+  },[nhFavorites,nhHistory,roumanFavorites,roumanHistory,roumanPages,onOpenNh,onOpenRouman,onShowRouman,onRemoveNh,onRemoveRouman,source,kind,sort,search,updates,onlyUpdates,coverOverrides]);
+  // Repair only a small number of missing covers on first entry; do not issue a burst of requests.
+  useEffect(()=>{
+    let cancelled=false;
+    const candidates=items.filter(x=>!safeCoverUrl(x.cover) && !coverAttempted.current.has(x.key))
+      .slice(0,maxAutoCoverChecks);
+    void (async()=>{
+      for(const item of candidates){
+        if(cancelled) break;
+        await repairCover(item.key);
+      }
+    })();
+    return()=>{cancelled=true;};
+  // Intentionally run only on first mount: manual repair handles later failures.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+  const refreshMissingCovers=async()=>{
+    if(repairingCovers) return;
+    const targets=items.filter(x=>!safeCoverUrl(x.cover)||failedCovers.includes(x.key)).slice(0,maxManualCoverChecks);
+    if(!targets.length){setCoverStatus('目前沒有需要補齊的封面。');return;}
+    setRepairingCovers(true);
+    let repaired=0;
+    for(let i=0;i<targets.length;i++){
+      setCoverStatus(`正在更新封面 ${i+1}/${targets.length}：${targets[i].title}`);
+      setCoverRetries(previous=>({...previous,[targets[i].key]:(previous[targets[i].key]??0)+1}));
+      if(await repairCover(targets[i].key)) repaired++;
+    }
+    if(mounted.current){setRepairingCovers(false);setCoverStatus(`已檢查 ${targets.length} 部，取得封面 ${repaired} 部；其餘可稍後重試。`);}
+  };
+  const onCoverError=(key:string)=>{
+    setFailedCovers(previous=>previous.includes(key)?previous:[...previous,key]);
+    void repairCover(key);
+  };
   return <section className="content shelfPage">
     <div className="pill">MANGAHUB · PERSONAL LIBRARY</div>
     <h1>我的<span>漫畫書架</span></h1>
@@ -135,11 +228,17 @@ export default function UnifiedShelf({ nhFavorites, nhHistory, roumanPages, onOp
       <label><span>排序</span><select value={sort} onChange={e=>setSort(e.target.value as typeof sort)}><option value="recent">最近閱讀</option><option value="title">標題 A–Z</option></select></label>
       <label className="shelfSearch"><Search size={16}/><input aria-label="搜尋書架" value={search} onChange={e=>setSearch(e.target.value)} placeholder="搜尋書架作品"/></label>
     </div>
-    <p className="shelfCount">目前顯示 {items.length} 部作品</p>
+    <div className="shelfCoverRepairBar">
+      <span>目前顯示 {items.length} 部作品 · 封面缺少或載入失敗時可自動／手動重新取得</span>
+      <button type="button" className="secondaryButton" disabled={repairingCovers}
+        onClick={()=>void refreshMissingCovers()}><RefreshCw size={15}/>{repairingCovers?'修復中…':'補齊書架封面'}</button>
+      {coverStatus&&<small role="status">{coverStatus}</small>}
+    </div>
     {items.length===0?<div className="shelfEmpty"><Library size={36}/><h2>目前沒有符合的作品</h2><p>前往漫畫探索加入收藏，或調整書架篩選條件。</p></div>:
       <div className="shelfGrid">{items.map(item=><article key={item.key} className="shelfCard">
         <button className="shelfCover" onClick={item.open} aria-label={`開啟 ${item.title}`}>
-          {item.cover?<img src={item.cover} alt="" loading="lazy" onError={e=>{e.currentTarget.style.display='none';}}/>:<BookOpen size={32}/>}</button>
+          <ShelfCoverImage key={item.key+':'+(item.cover??'missing')+':'+(coverRetries[item.key]??0)} url={safeCoverUrl(item.cover)} source={item.source}
+            title={item.title} onError={()=>onCoverError(item.key)}/></button>
         <div className="shelfInfo"><span className="shelfSource">{item.source==='nh'?'nHentai':'Rouman5'} {item.saved?'· 已收藏':''}</span>
           <button className="shelfTitle" onClick={item.open}>{item.title}</button>
           {item.updates>0&&<div className="shelfNewChapter"><BellDot size={14}/> NEW · 新增 {item.updates} 話 <button onClick={()=>{markSeen(item.id);onShowRouman(item.id);}} title="查看更新並清除 NEW 標記"><CheckCheck size={14}/> 查看</button></div>}
