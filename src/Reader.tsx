@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, ArrowLeft, ChevronLeft, ChevronRight, ImagePlus, RotateCcw, Trash2, ZoomOut } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ChevronLeft, ChevronRight, ImagePlus, RotateCcw, Trash2, ZoomOut, BookOpen, LoaderCircle } from 'lucide-react';
 import { drawRoumanImage, isRoumanCdnImage, needsRoumanStripRepair } from './roumanStripRepair';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -124,7 +124,7 @@ function ReaderImage({ src, index, eager, cacheLimitMb }: { src: string; index: 
   </div>;
 }
 
-export default function Reader({ initialUrls, initialPage, progressKey, onProgress, onBack, backLabel, galleryTitle }: { initialUrls?: string[]; initialPage?: number; progressKey?: string; onProgress?: (page: number) => void; onBack?: () => void; backLabel?: string; galleryTitle?: string }) {
+export default function Reader({ initialUrls, initialPage, progressKey, onProgress, onBack, backLabel, galleryTitle, chapterNavigation }: { initialUrls?: string[]; initialPage?: number; progressKey?: string; onProgress?: (page: number) => void; onBack?: () => void; backLabel?: string; galleryTitle?: string; chapterNavigation?: { index: number; count: number; onNavigate: (direction: -1 | 1) => Promise<void> } }) {
   // Freeze restore target for this Reader mount; progress changes must not restart restore.
   const resumePage = useRef(initialPage).current;
   const [imageText, setImageText] = useState(() => initialUrls?.join('\n') ?? safeRead(STORAGE_URLS, ''));
@@ -138,6 +138,18 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
   const [zoom, setZoom] = useState(100);
   const [focusMode, setFocusMode] = useState(false);
   const [dockVisible, setDockVisible] = useState(true);
+  const [chapterBusy, setChapterBusy] = useState(false);
+  const [chapterError, setChapterError] = useState('');
+  const changeChapter = async (direction: -1 | 1) => {
+    if (!chapterNavigation || chapterBusy) return;
+    const next = chapterNavigation.index + direction;
+    if (next < 0 || next >= chapterNavigation.count) return;
+    setChapterBusy(true);
+    setChapterError('');
+    try { await chapterNavigation.onNavigate(direction); }
+    catch (error) { setChapterError(`無法開啟相鄰章節：${String(error)}`); setChapterBusy(false); }
+  };
+
   const edgeTouch = useRef<{ x: number; y: number; time: number } | null>(null);
   const scrollBaseline = useRef(0);
   const scrollTravel = useRef(0);
@@ -358,6 +370,19 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
     slot?.scrollIntoView({ block: 'start', behavior: 'instant' });
     setScrollPage(next);
   };
+  const chapterEndCard = chapterNavigation && sources.length > 0 && <section className="mh-chapter-end" aria-label="章節結束與下一話導覽">
+    <div className="mh-chapter-end-icon"><BookOpen size={22}/></div>
+    <strong>本話閱讀完畢</strong>
+    <p>第 {chapterNavigation.index + 1} 話 / 共 {chapterNavigation.count} 話</p>
+    <div className="mh-chapter-end-actions">
+      <button disabled={chapterBusy || chapterNavigation.index <= 0} onClick={() => void changeChapter(-1)}><ChevronLeft size={18}/> 上一話</button>
+      <button className="mh-chapter-end-next" disabled={chapterBusy || chapterNavigation.index + 1 >= chapterNavigation.count} onClick={() => void changeChapter(1)}>
+        {chapterBusy ? <LoaderCircle size={18} className="mh-spinner"/> : <ChevronRight size={18}/>} 下一話
+      </button>
+    </div>
+    {chapterError && <p className="mh-chapter-end-error" role="alert">{chapterError}</p>}
+    {chapterNavigation.index + 1 >= chapterNavigation.count && <small>已是目前最後一話</small>}
+  </section>;
   // Offscreen images recycle their decoded resources; scroll events still track progress independently.
   return <section className={`content readerContent${focusMode ? ' reader-focus' : ''}${dockVisible ? '' : ' reader-dock-hidden'}`} onTouchStartCapture={onReaderTouchStart} onTouchEndCapture={onReaderTouchEnd}>
     {onBack && <div className="readerReturnBar"><button className="readerBack" onClick={onBack} title="返回先前瀏覽的列表（Esc / Alt+←）"><ArrowLeft size={18}/> {backLabel ?? '返回上一頁'}</button><span>Esc / Alt + ← 返回</span></div>}
@@ -397,6 +422,7 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
     {sources.length === 0 ? <div className="empty"><ImagePlus size={34}/><h2>等待圖片</h2><p>可選取自己的漫畫圖片，或貼上有權存取的 HTTPS 圖片網址。</p></div> : mode === 'vertical' ?
       <div ref={scroller} onClick={onReadingSurfaceTap} className="scrollReader mh-scroll-reader" style={{ '--reader-width': `${zoom}%` } as React.CSSProperties}>
         {sources.map((item, i) => <ReaderImage key={`${item.url}-${i}`} src={item.url} index={i} eager={false} cacheLimitMb={cacheLimitMb} />)}
+        {chapterEndCard}
       </div> : <div className="singleReader mh-single-reader" onTouchStart={onSingleTouchStart} onTouchEnd={onSingleTouchEnd}>
         <div className="pager">
           <button disabled={current === 0} onClick={() => goTo(current - 1)}><ChevronLeft size={16}/> 上一頁</button>
@@ -407,6 +433,7 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
           <ReaderImage key={`${current}-${sources[current].url}`} src={sources[current].url} index={current} eager cacheLimitMb={cacheLimitMb} />
         </div>
         <p className="mh-help">方向鍵可翻頁（右至左模式會反轉方向）。圖片若因來源站限制無法直接載入，請使用合法提供的圖片檔案。</p>
+        {current === sources.length - 1 && chapterEndCard}
       </div>}
     {sources.length > 0 && <nav className="mh-mobile-reader-dock" aria-label="手機閱讀控制列" aria-hidden={focusMode || !dockVisible}>
       {onBack && <button className="mh-mobile-dock-back" onClick={onBack} aria-label="返回漫畫列表"><ArrowLeft size={19}/></button>}

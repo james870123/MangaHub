@@ -31,6 +31,9 @@ function App(){
   const [accountGalleryId,setAccountGalleryId]=useState<number|null>(null);
   const [readerUrls,setReaderUrls]=useState<string[]>([]);
   const [readerSession,setReaderSession]=useState(0);
+  const [readerLeaving,setReaderLeaving]=useState(false);
+  const [readerEntering,setReaderEntering]=useState(false);
+  const returnTimer=useRef<number|null>(null);
   const [readerOrigin,setReaderOrigin]=useState<'catalog'|'rouman'|'account'|'library'|null>(null);
   const [currentGallery,setCurrentGallery]=useState<GalleryDetail|null>(null);
   const [roumanReading,setRoumanReading]=useState<RoumanChapter|null>(null);
@@ -38,13 +41,23 @@ function App(){
   const originScroll=useRef(0);
   const roumanPageKey=(c:RoumanChapter)=>`${c.bookId}:${c.chapterId||c.chapterIndex}`;
   function showTab(next:Tab){if(next==='catalog'&&tab!=='reader')requestAnimationFrame(()=>window.scrollTo(0,catalogScroll.current));setTab(next);}
-  function readImages(urls:string[],origin:'catalog'|'rouman'|'account'|'library'){
-    originScroll.current=window.scrollY;
-    if(origin==='catalog')catalogScroll.current=window.scrollY;
+  function readImages(urls:string[],origin:'catalog'|'rouman'|'account'|'library',preserveOrigin=false){
+    if(!preserveOrigin){
+      originScroll.current=window.scrollY;
+      if(origin==='catalog')catalogScroll.current=window.scrollY;
+    }
     setReaderOrigin(origin);setReaderUrls(urls);setReaderSession(v=>v+1);setTab('reader');window.scrollTo(0,0);
   }
-  function readRoumanChapter(c:RoumanChapter,origin:'rouman'|'library'='rouman'){
-    setCurrentGallery(null);setRoumanReading(c);readImages(c.pageUrls,origin);
+  function readRoumanChapter(c:RoumanChapter,origin:'rouman'|'library'='rouman',preserveOrigin=false){
+    setCurrentGallery(null);setRoumanReading(c);readImages(c.pageUrls,origin,preserveOrigin);
+  }
+  async function navigateRoumanChapter(direction:-1|1){
+    if(!roumanReading)return;
+    const next=roumanReading.chapterIndex+direction;
+    if(next<0 || next>=roumanReading.chapterCount)return;
+    const url=`https://rouman5.com/books/${encodeURIComponent(roumanReading.bookId)}/${next}`;
+    const chapter=await invoke<RoumanChapter>('inspect_rouman_chapter',{url});
+    readRoumanChapter(chapter,readerOrigin==='library'?'library':'rouman',true);
   }
   function readNhGallery(g:GalleryDetail,origin:'catalog'|'account'|'rouman'|'library'='catalog'){
     setNhHistory(prev=>{const old=prev.find(r=>r.id===g.id);
@@ -78,10 +91,25 @@ function App(){
   }
   const [shelfRevision,setShelfRevision]=useState(0);
   function returnFromReader(){
-    const dest=readerOrigin??'catalog';setReaderOrigin(null);setTab(dest);
+    if(readerLeaving)return;
+    const dest=readerOrigin??'catalog';
     const y=dest==='catalog'?catalogScroll.current:originScroll.current;
-    requestAnimationFrame(()=>requestAnimationFrame(()=>window.scrollTo({top:y,behavior:'instant'})));
+    const finish=()=>{
+      setReaderOrigin(null);setReaderLeaving(false);setTab(dest);
+      requestAnimationFrame(()=>requestAnimationFrame(()=>{
+        window.scrollTo({top:y,behavior:'instant'});
+        setReaderEntering(true);
+        if(returnTimer.current!==null)window.clearTimeout(returnTimer.current);
+        returnTimer.current=window.setTimeout(()=>setReaderEntering(false),260);
+      }));
+    };
+    const mobile=window.matchMedia('(max-width:750px)').matches;
+    const reduced=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if(!mobile||reduced){finish();return;}
+    setReaderLeaving(true);
+    returnTimer.current=window.setTimeout(finish,215);
   }
+  useEffect(()=>()=>{if(returnTimer.current!==null)window.clearTimeout(returnTimer.current);},[]);
   useEffect(()=>{if(tab!=='reader'||!readerOrigin)return;
     const handler=(e:KeyboardEvent)=>{if(e.key==='Escape'||(e.altKey&&e.key==='ArrowLeft')){
       if(document.activeElement&&['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName))return;
@@ -111,7 +139,7 @@ function App(){
     if(!currentGallery)return;
     setNhHistory(prev=>prev.map(r=>r.id===currentGallery.id&&r.page!==page?{...r,page,updatedAt:Date.now()}:r));
   },[currentGallery,setNhHistory]);
-  return <div className={`${sidebarCollapsed ? 'app sidebar-collapsed' : 'app'}${tab === 'reader' ? ' reader-active' : ''}`}>
+  return <div className={`${sidebarCollapsed ? 'app sidebar-collapsed' : 'app'}${tab === 'reader' ? ' reader-active' : ''}${readerLeaving ? ' mh-reader-leaving' : ''}${readerEntering ? ' mh-reader-entering' : ''}`}>
     <aside className="sidebar">
       <div className="brand"><div className="brandicon"><BookOpen size={22}/></div><div className="brandText"><strong>MangaHub</strong><small>YOUR READING SPACE</small></div></div>
       <button className="sidebarToggle" onClick={()=>setSidebarCollapsed(v=>!v)} title={sidebarCollapsed?'展開側邊欄':'收合側邊欄'}>{sidebarCollapsed?<PanelLeftOpen size={19}/>:<PanelLeftClose size={19}/>}<span>{sidebarCollapsed?'展開選單':'收合選單'}</span></button>
@@ -120,14 +148,14 @@ function App(){
       <button className={tab==='rouman'?'nav active':'nav'} onClick={()=>showTab('rouman')}><BookOpen size={19}/><span className="navText">Rouman5 探索</span></button>
       <button className={tab==='library'?'nav active':'nav'} onClick={()=>showTab('library')}><Library size={19}/><span className="navText">我的漫畫書架</span></button>
       <button className={tab==='account'?'nav active':'nav'} onClick={()=>showTab('account')}><UserRound size={19}/><span className="navText">帳號與同步</span></button>
-      <div className="asideFoot"><span className="footText">v0.6.5 · Local-first</span></div>
+      <div className="asideFoot"><span className="footText">v0.6.7 · Local-first</span></div>
     </aside>
     <main className="main"><header><span className="eyebrow">MangaHub / {tab==='catalog'?'nHentai':tab==='rouman'?'Rouman5':tab==='library'?'My Library':tab==='account'?'Account':'Reader'}</span><span className="status">● Local-first</span></header>
       <div className={tab==='catalog'?'catalogView':'catalogView is-hidden'}><NhCatalog adultConfirmed={adultConfirmed} showCovers={showCovers} onAdultChange={setAdultConfirmed} onCoversChange={setShowCovers} favorites={nhFavorites} onToggleFavorite={toggleNhFavorite} history={nhHistory} onClearHistory={()=>setNhHistory([])} onReadGallery={readNhGallery} onRepairHistoryCover={repairHistoryCover} blockedTags={blockedTags} onOpenComments={id=>{setAccountGalleryId(id);setTab('account');window.scrollTo(0,0);}}/></div>
       <div className={tab==='rouman'?'sourceView':'sourceView is-hidden'}><RoumanSource active={tab==='rouman'} onRead={readRoumanChapter} nhHistory={nhHistory} onOpenNh={id=>void openNhId(id,'rouman')} pageProgress={roumanPages}/></div>
       {tab==='library'&&<UnifiedShelf key={shelfRevision} nhFavorites={nhFavorites} nhHistory={nhHistory} roumanPages={roumanPages} onOpenNh={id=>void openNhId(id,'library')} onOpenRouman={url=>void openRoumanUrl(url)} onShowRouman={openRoumanBook} onRemoveNh={id=>setNhFavorites(p=>p.filter(x=>x.id!==id))} onRemoveRouman={removeRoumanFavorite}/>}
       {tab==='account'&&<NhAccount onSyncFavorites={syncOfficialFavorites} onRemoteFavorite={handleRemoteFavorite} onOpenGallery={id=>void openNhId(id,'account')} onBlacklistUpdated={setBlockedTags} selectedGalleryId={accountGalleryId}/>}
-      {tab==='reader'&&<Reader key={readerSession} initialUrls={readerUrls} initialPage={roumanReading?roumanPages[roumanPageKey(roumanReading)]?.page??1:undefined} progressKey={roumanReading?`rouman:${roumanPageKey(roumanReading)}`:undefined} onProgress={currentGallery?recordNhProgress:roumanReading?recordRoumanProgress:undefined} galleryTitle={currentGallery?.title??(roumanReading?`${roumanReading.bookTitle} · ${roumanReading.chapterTitle}`:undefined)} onBack={readerOrigin?returnFromReader:undefined} backLabel="返回上一頁"/>}
+      {tab==='reader'&&<Reader key={readerSession} initialUrls={readerUrls} initialPage={roumanReading?roumanPages[roumanPageKey(roumanReading)]?.page??1:undefined} progressKey={roumanReading?`rouman:${roumanPageKey(roumanReading)}`:undefined} onProgress={currentGallery?recordNhProgress:roumanReading?recordRoumanProgress:undefined} galleryTitle={currentGallery?.title??(roumanReading?`${roumanReading.bookTitle} · ${roumanReading.chapterTitle}`:undefined)} onBack={readerOrigin?returnFromReader:undefined} backLabel="返回上一頁" chapterNavigation={roumanReading&&roumanReading.chapterCount>0?{index:roumanReading.chapterIndex,count:roumanReading.chapterCount,onNavigate:navigateRoumanChapter}:undefined}/>}
     </main>
   </div>;
 }

@@ -391,3 +391,25 @@ button, input, select, textarea { touch-action: manipulation; }
 .shelfCoverRepairBar .secondaryButton{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:38px;padding:7px 12px}
 .shelfCoverRepairBar .secondaryButton:disabled{opacity:.55;cursor:wait}
 .shelfCover img{display:block;width:100%;height:100%;object-fit:cover}
+
+/* v0.6.7: navigation at the end of a Rouman5 chapter, not inside image slots. */
+.mh-chapter-end {box-sizing:border-box; width:min(100%,720px); margin:36px auto 44px; padding:26px 20px; text-align:center; border:1px solid #594365; border-radius:17px; background:#211c2a; color:#ead7f4; display:flex; flex-direction:column; align-items:center; gap:8px;}
+.mh-chapter-end-icon {width:42px;height:42px;border-radius:12px;background:#493052;display:flex;align-items:center;justify-content:center;color:#f4d4ff;}
+.mh-chapter-end strong {font-size:19px;}
+.mh-chapter-end p {margin:0; color:#c3b4ce; font-size:13px;}
+.mh-chapter-end-actions {display:grid;grid-template-columns:1fr 1fr;gap:12px;width:min(100%,420px);margin-top:14px;}
+.mh-chapter-end-actions button {min-height:48px;border:1px solid #775d86;background:#362c42;color:#f2e8f9;border-radius:11px;display:flex;align-items:center;justify-content:center;gap:7px;font-weight:700;cursor:pointer;}
+.mh-chapter-end-actions .mh-chapter-end-next {background:#b982d1;color:#17101d;border-color:#b982d1;}
+.mh-chapter-end-actions button:disabled {opacity:.38;cursor:not-allowed;}
+.mh-chapter-end .mh-chapter-end-error {color:#ffbfc4;font-weight:500;max-width:100%;overflow-wrap:anywhere;}
+.mh-chapter-end small {color:#ac9cad;}
+.mh-spinner {animation:mh-spin .9s linear infinite;}
+@keyframes mh-spin {to{transform:rotate(360deg)}}
+/* Lightweight iPhone-style back animation. Desktop remains instant. */
+@media(max-width:750px) and (prefers-reduced-motion:no-preference) {
+  .mh-reader-leaving .readerContent {animation:mh-reader-slide-out .215s ease-in both;pointer-events:none;}
+  .mh-reader-entering .main {animation:mh-reader-slide-in .26s cubic-bezier(.19,.74,.28,1) both;}
+  @keyframes mh-reader-slide-out {from{transform:translate3d(0,0,0);opacity:1}to{transform:translate3d(100%,0,0);opacity:.6}}
+  @keyframes mh-reader-slide-in {from{transform:translate3d(-12%,0,0);opacity:.78}to{transform:translate3d(0,0,0);opacity:1}}
+}
+@media(max-width:750px){.mh-chapter-end {margin:22px auto 24px;padding:20px 12px}.mh-chapter-end-actions {gap:8px}.mh-chapter-end-actions button {min-height:48px;}}
