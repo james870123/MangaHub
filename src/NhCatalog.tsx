@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Bookmark, BookOpen, ChevronLeft, ChevronRight, Clock3, Eye, EyeOff, Heart, LoaderCircle, RefreshCw, Search, Shield, Star, Trash2, Shuffle, Sparkles } from 'lucide-react';
 
@@ -56,6 +56,112 @@ function categoryTerm(filter: CategoryFilter): string {
   return `${filter.kind}:"${clean}"`;
 }
 
+
+// Explore-cover recovery is deliberately separate from favorites and reading history.
+// Read only gallery metadata when a visible cover is missing or has failed.
+const nhCoverStoreKey = 'mangahub-nh-explore-covers-v067';
+const nhCoverStoreLimit = 250;
+function validNhCover(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' && parsed.hostname === 't.nhentai.net'
+      && !parsed.port && !parsed.username && !parsed.password
+      && !parsed.search && !parsed.hash
+      && /^\/galleries\/\d+\/(?:cover|thumb)\.(?:jpg|png|webp|avif)$/.test(parsed.pathname);
+  } catch { return false; }
+}
+function readNhCoverIndex(): Record<string, string> {
+  try {
+    const source: unknown = JSON.parse(localStorage.getItem(nhCoverStoreKey) ?? '{}');
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return {};
+    return Object.fromEntries(Object.entries(source).filter(([id, url]) =>
+      /^\d+$/.test(id) && typeof url === 'string' && validNhCover(url)));
+  } catch { return {}; }
+}
+const nhCoverIndex = readNhCoverIndex();
+function rememberNhCover(id: number, url: string) {
+  if (!Number.isSafeInteger(id) || id < 1 || !validNhCover(url)) return;
+  delete nhCoverIndex[id];
+  nhCoverIndex[id] = url;
+  const keys = Object.keys(nhCoverIndex);
+  for (const key of keys.slice(0, Math.max(0, keys.length - nhCoverStoreLimit))) delete nhCoverIndex[key];
+  try { localStorage.setItem(nhCoverStoreKey, JSON.stringify(nhCoverIndex)); } catch { /* storage is optional */ }
+}
+function forgetNhCover(id: number, url: string) {
+  if (nhCoverIndex[id] !== url) return;
+  delete nhCoverIndex[id];
+  try { localStorage.setItem(nhCoverStoreKey, JSON.stringify(nhCoverIndex)); } catch { /* optional */ }
+}
+const nhCoverTasks: Array<() => void> = [];
+let activeNhCoverTasks = 0;
+function pumpNhCoverTasks() {
+  while (activeNhCoverTasks < 2 && nhCoverTasks.length) {
+    const run = nhCoverTasks.shift();
+    if (run) { activeNhCoverTasks++; run(); }
+  }
+}
+function queueNhCoverTask<T>(job: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    nhCoverTasks.push(() => {
+      void job().then(resolve, reject).finally(() => { activeNhCoverTasks--; pumpNhCoverTasks(); });
+    });
+    pumpNhCoverTasks();
+  });
+}
+const nhCoverPending = new Map<number, Promise<string | null>>();
+function lookupNhCover(id: number): Promise<string | null> {
+  const inFlight = nhCoverPending.get(id);
+  if (inFlight) return inFlight;
+  const promise = queueNhCoverTask(async () => {
+    const gallery = await invoke<GalleryDetail>('fetch_nh_gallery', { input: String(id) });
+    const cover = gallery.coverUrl ?? null;
+    return cover && validNhCover(cover) ? cover : null;
+  }).finally(() => { nhCoverPending.delete(id); });
+  nhCoverPending.set(id, promise);
+  return promise;
+}
+function NhCatalogCover({ item, enabled, onRecovered }: {
+  item: CatalogItem; enabled: boolean; onRecovered: (id: number, url: string) => void;
+}) {
+  const [source, setSource] = useState<string | null>(() => nhCoverIndex[item.id] ?? item.coverUrl);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [visible, setVisible] = useState(false);
+  const container = useRef<HTMLDivElement | null>(null);
+  const attempted = useRef(false);
+  useEffect(() => {
+    attempted.current = false;
+    setFailed(null);
+    setSource(nhCoverIndex[item.id] ?? item.coverUrl);
+    setVisible(false);
+  }, [item.id, item.coverUrl]);
+  useEffect(() => {
+    if (!enabled) return;
+    const element = container.current;
+    if (!element) return;
+    if (typeof IntersectionObserver === 'undefined') { setVisible(true); return; }
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting) { setVisible(true); observer.disconnect(); }
+    }, { rootMargin: '250px' });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [enabled, item.id]);
+  useEffect(() => {
+    if (!enabled || !visible || attempted.current || (source && failed !== source)) return;
+    attempted.current = true;
+    let cancelled = false;
+    void lookupNhCover(item.id).then(url => {
+      if (!cancelled && url && url !== failed) { setSource(url); setFailed(null); }
+    }).catch(() => { /* keep a visible fallback; don't retry automatically on 403/429 */ });
+    return () => { cancelled = true; };
+  }, [enabled, visible, item.id, source, failed]);
+  const display = enabled && source && source !== failed && validNhCover(source) ? source : null;
+  return <div ref={container} className="catalogCover">
+    <BookOpen size={32}/>
+    {display && <img src={display} alt="" loading="lazy" referrerPolicy="no-referrer"
+      onLoad={() => { rememberNhCover(item.id, display); onRecovered(item.id, display); }}
+      onError={() => { forgetNhCover(item.id, display); setFailed(display); }}/>}
+  </div>;
+}
 
 export default function NhCatalog(props: Props) {
   const { adultConfirmed, showCovers, onAdultChange, onCoversChange, favorites, onToggleFavorite, history, onClearHistory, onReadGallery, onRepairHistoryCover, blockedTags, onOpenComments } = props;
@@ -183,6 +289,10 @@ export default function NhCatalog(props: Props) {
     const query = `tag:"${tag.replace(/"/g,'')}"`;
     setSearchText(query); setSubmitted(query); setMode('search'); setPage(1); setSelection(null);
   }
+  const recordRecoveredCover = useCallback((id: number, url: string) => {
+    setCoverOverrides(prev => prev[id] === url ? prev : { ...prev, [id]: url });
+    onRepairHistoryCover(id, url);
+  }, [onRepairHistoryCover]);
   const visibleItems = (mode === 'favorites' ? favorites : mode === 'history' ? history.map(infoForRecord) : (result?.items ?? [])).map(item => coverOverrides[item.id] ? { ...item, coverUrl: coverOverrides[item.id] } : item);
   const excluded = blockedTags.map(x=>x.toLowerCase().trim()).filter(Boolean);
   const filteredItems = visibleItems.filter(item=>!item.tags.some(tag=>excluded.some(b=>tag.toLowerCase()===b)));
@@ -196,8 +306,8 @@ export default function NhCatalog(props: Props) {
   </section>;
 
   return <section className="content catalogPage">
-    <div className="pill">MANGAHUB · DISCOVER v0.5.7</div>
-    <h1>探索<span>漫畫</span></h1>
+    <div className="pill">SOURCE · NHENTAI · DISCOVER</div>
+    <h1>nHentai <span>探索漫畫</span></h1>
     <p className="lead">瀏覽最新、熱門、搜尋與本機書架。封面預設隱藏，只有你允許時才顯示。</p>
     <div className="catalogTabs">
       {([['latest','最新'],['popular','熱門'],['search','搜尋'],['categories','分類'],['favorites','我的收藏'],['history','最近閱讀']] as [Mode,string][]).map(([value,label]) => <button key={value} className={mode === value ? 'on' : ''} onClick={() => changeMode(value)}>{label}</button>)}
@@ -265,8 +375,8 @@ export default function NhCatalog(props: Props) {
     {blockedTags.length>0 && <p className="catalogBlockedNotice">已啟用 {blockedTags.length} 個黑名單標籤（僅篩選 API 已提供標籤的作品）</p>}
     <div className="catalogGrid">{filteredItems.map(item => <article key={item.id} className="catalogCard">
       <button className="catalogCardMain" onClick={() => void openDetail(item)} aria-label={`查看 ${item.title}`}>
-        <div className="catalogCover"><BookOpen size={32}/>{showCovers && item.coverUrl && <img src={item.coverUrl} alt="作品封面" title="封面無法載入時，點擊作品取得最新資料" loading="lazy" referrerPolicy="no-referrer" onError={e => { e.currentTarget.style.display = 'none'; }}/>}</div>
-        <div className="catalogCardText"><strong>{item.title}</strong><small>#{item.id} · {item.pageCount || '—'} 頁</small>{mode === 'history' && <small><Clock3 size={12}/> 上次第 {history.find(r => r.id === item.id)?.page ?? 1} 頁</small>}{mode === 'history' && !item.coverUrl && <small>封面未儲存，點此更新資料</small>}</div>
+        <NhCatalogCover item={item} enabled={showCovers} onRecovered={recordRecoveredCover}/>
+        <div className="catalogCardText"><strong title={item.title}>{item.title}</strong><small>#{item.id} · {item.pageCount || '—'} 頁</small>{mode === 'history' && <small><Clock3 size={12}/> 上次第 {history.find(r => r.id === item.id)?.page ?? 1} 頁</small>}{mode === 'history' && !item.coverUrl && <small>封面未儲存，點此更新資料</small>}</div>
       </button>
       <button className="catalogHeart" aria-label={favorites.some(f => f.id === item.id) ? '取消收藏' : '收藏'} onClick={() => onToggleFavorite(item)}><Heart size={18} fill={favorites.some(f => f.id === item.id) ? 'currentColor' : 'none'}/></button>
     </article>)}</div>
