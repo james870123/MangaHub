@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   ArrowDownAZ, ArrowUpAZ, BookOpen, Check, ChevronLeft, ChevronRight,
@@ -55,6 +55,32 @@ export default function RoumanSource({ onRead, active, nhHistory, onOpenNh, page
   const [badCovers, setBadCovers] = useState<string[]>([]);
   const [showCovers, setShowCovers] = useState(() => saved<boolean>('mh-v05-show-covers', false));
   const [sectionFilter, setSectionFilter] = useState('all');
+  // Save the catalog position while a book is open; do not reset it on Reader return.
+  const catalogScrollRef = useRef(0);
+  const detailRef = useRef<HTMLDivElement | null>(null);
+  const pendingDetailFocusRef = useRef<string | null>(null);
+  const pendingCatalogRestoreRef = useRef(false);
+
+  useLayoutEffect(() => {
+    if (detail && pendingDetailFocusRef.current === detail.id) {
+      pendingDetailFocusRef.current = null;
+      const element = detailRef.current;
+      if (element) {
+        // Scroll the actual document, since the catalog and detail share the same page.
+        const y = window.scrollY + element.getBoundingClientRect().top - 16;
+        window.scrollTo({ top: Math.max(0, y), behavior: 'instant' });
+      }
+    } else if (!detail && pendingCatalogRestoreRef.current) {
+      pendingCatalogRestoreRef.current = false;
+      window.scrollTo({ top: catalogScrollRef.current, behavior: 'instant' });
+    }
+  }, [detail]);
+
+  function returnToCatalog() {
+    pendingDetailFocusRef.current = null;
+    pendingCatalogRestoreRef.current = true;
+    setDetail(null); setChapter(null); setError('');
+  }
 
   useEffect(() => {
     const update = (event: Event) => {
@@ -99,12 +125,14 @@ export default function RoumanSource({ onRead, active, nhHistory, onOpenNh, page
     return () => window.removeEventListener('mangahub-open-rouman-book', onBook);
   }, []);
   async function openBook(id: string) {
+    if (!detail) catalogScrollRef.current = window.scrollY;
+    pendingDetailFocusRef.current = id;
     setBusy(true); setError(''); setChapterSearch('');
     try {
       const book = await invoke<BookDetail>('inspect_rouman_book', { bookId: id });
       setDetail(book); setChapter(null);
       // Keep the existing catalog mounted: returning to it won't reset filters or pagination.
-    } catch (e) { setError(String(e)); }
+    } catch (e) { pendingDetailFocusRef.current = null; setError(String(e)); }
     finally { setBusy(false); }
   }
   async function inspect(url: string) {
@@ -207,8 +235,8 @@ export default function RoumanSource({ onRead, active, nhHistory, onOpenNh, page
       <button className="toggle" disabled={busy || page <= 0} onClick={() => mode === 'search' ? void runSearch(searchedTerm, page - 1) : void loadCatalog(mode, page - 1)}><ChevronLeft size={15}/> 上一頁</button><span>第 {page + 1} 頁</span>
       <button className="toggle" disabled={busy || !catalog?.hasNext} onClick={() => mode === 'search' ? void runSearch(searchedTerm, page + 1) : void loadCatalog(mode, page + 1)}>下一頁 <ChevronRight size={15}/></button>
     </div>}
-    {detail && <div className="roumanDetail">
-      <button className="roumanBack" onClick={() => {setDetail(null);setChapter(null);setError('');}}><ChevronLeft size={16}/> 返回原本作品列表</button>
+    {detail && <div className="roumanDetail" ref={detailRef}>
+      <button className="roumanBack" onClick={returnToCatalog}><ChevronLeft size={16}/> 返回原本作品列表</button>
       <div className="roumanDetailHero"><div className="roumanDetailCover">{showCovers && activeCard?.coverUrl ? <img src={activeCard.coverUrl} alt="作品封面" onError={e => { e.currentTarget.style.visibility = 'hidden'; }}/> : <BookOpen size={42}/>}</div>
         <div className="roumanDetailBody"><h2>{displayTitle(detail.title)}</h2><p className="detailNote">{detail.description || '來源未提供作品介紹。'}</p>
           <div className="roumanDetailActions"><span><BookOpen size={15}/>{detail.chapters.length} 個章節</span>
