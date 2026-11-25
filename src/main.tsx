@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { invoke } from '@tauri-apps/api/core';
-import { BookOpen, Library, PanelLeftClose, PanelLeftOpen, Search, UserRound } from 'lucide-react';
+import { BookOpen, Library, Wrench, PanelLeftClose, PanelLeftOpen, Search, UserRound } from 'lucide-react';
 import './style.css';
 import Reader from './Reader';
 import RoumanSource, { type RoumanChapter } from './RoumanSource';
@@ -9,13 +9,14 @@ import NhCatalog, { type CatalogItem, type GalleryDetail, type ReadingRecord } f
 import NhAccount, { type AccountItem } from './NhAccount';
 import UnifiedShelf from './UnifiedShelf';
 import BackupSync, { type BackupData } from './BackupSync';
+import Diagnostics from './Diagnostics';
 
 function useSaved<T>(key:string,initial:T):[T,React.Dispatch<React.SetStateAction<T>>]{
   const [value,setValue]=useState<T>(()=>{try {const raw=localStorage.getItem(key);return raw?JSON.parse(raw) as T:initial;}catch{return initial;}});
   useEffect(()=>{localStorage.setItem(key,JSON.stringify(value));},[key,value]);
   return [value,setValue];
 }
-type Tab='catalog'|'rouman'|'library'|'account'|'reader';
+type Tab='catalog'|'rouman'|'library'|'account'|'diagnostics'|'reader';
 type RoumanProgress={page:number;total:number;updatedAt:number};
 function App(){
   const [tab,setTab]=useState<Tab>('catalog');
@@ -160,12 +161,14 @@ function App(){
       <button className={tab==='rouman'?'nav active':'nav'} onClick={()=>showTab('rouman')}><BookOpen size={19}/><span className="navText">Rouman5 探索</span></button>
       <button className={tab==='library'?'nav active':'nav'} onClick={()=>showTab('library')}><Library size={19}/><span className="navText">我的漫畫書架</span></button>
       <button className={tab==='account'?'nav active':'nav'} onClick={()=>showTab('account')}><UserRound size={19}/><span className="navText">帳號與同步</span></button>
-      <div className="asideFoot"><span className="footText">v0.6.8 · Local-first</span></div>
+      <button className={tab==='diagnostics'?'nav active':'nav'} onClick={()=>showTab('diagnostics')}><Wrench size={19}/><span className="navText">診斷與維護</span></button>
+      <div className="asideFoot"><span className="footText">v0.7.1 · Local-first</span></div>
     </aside>
-    <main className="main"><header><span className="eyebrow">MangaHub / {tab==='catalog'?'nHentai':tab==='rouman'?'Rouman5':tab==='library'?'My Library':tab==='account'?'Account':'Reader'}</span><span className="status">● Local-first</span></header>
+    <main className="main"><header><span className="eyebrow">MangaHub / {tab==='catalog'?'nHentai':tab==='rouman'?'Rouman5':tab==='library'?'My Library':tab==='account'?'Account':tab==='diagnostics'?'Diagnostics':'Reader'}</span><span className="status">● Local-first</span></header>
       <div className={tab==='catalog'?'catalogView':'catalogView is-hidden'}><NhCatalog adultConfirmed={adultConfirmed} showCovers={showCovers} onAdultChange={setAdultConfirmed} onCoversChange={setShowCovers} favorites={nhFavorites} onToggleFavorite={toggleNhFavorite} history={nhHistory} onClearHistory={()=>setNhHistory([])} onReadGallery={readNhGallery} onRepairHistoryCover={repairHistoryCover} blockedTags={blockedTags} onOpenComments={id=>{setAccountGalleryId(id);setTab('account');window.scrollTo(0,0);}}/></div>
       <div className={tab==='rouman'?'sourceView':'sourceView is-hidden'}><RoumanSource key={roumanRevision} active={tab==='rouman'} onRead={readRoumanChapter} nhHistory={nhHistory} onOpenNh={id=>void openNhId(id,'rouman')} pageProgress={roumanPages}/></div>
       {tab==='library'&&<><BackupSync onImported={applyBackupImport}/><UnifiedShelf key={shelfRevision} nhFavorites={nhFavorites} nhHistory={nhHistory} roumanPages={roumanPages} onOpenNh={id=>void openNhId(id,'library')} onOpenRouman={url=>void openRoumanUrl(url)} onShowRouman={openRoumanBook} onRemoveNh={id=>setNhFavorites(p=>p.filter(x=>x.id!==id))} onRemoveRouman={removeRoumanFavorite}/></>}
+      {tab==='diagnostics'&&<Diagnostics/>}
       {tab==='account'&&<NhAccount onSyncFavorites={syncOfficialFavorites} onRemoteFavorite={handleRemoteFavorite} onOpenGallery={id=>void openNhId(id,'account')} onBlacklistUpdated={setBlockedTags} selectedGalleryId={accountGalleryId}/>}
       {tab==='reader'&&<Reader key={readerSession} initialUrls={readerUrls} initialPage={roumanReading?roumanPages[roumanPageKey(roumanReading)]?.page??1:undefined} progressKey={roumanReading?`rouman:${roumanPageKey(roumanReading)}`:undefined} onProgress={currentGallery?recordNhProgress:roumanReading?recordRoumanProgress:undefined} galleryTitle={currentGallery?.title??(roumanReading?`${roumanReading.bookTitle} · ${roumanReading.chapterTitle}`:undefined)} onBack={readerOrigin?returnFromReader:undefined} backLabel="返回上一頁" chapterNavigation={roumanReading&&roumanReading.chapterCount>0?{index:roumanReading.chapterIndex,count:roumanReading.chapterCount,onNavigate:navigateRoumanChapter}:undefined}/>}
     </main>
