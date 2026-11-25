@@ -8,6 +8,7 @@ import RoumanSource, { type RoumanChapter } from './RoumanSource';
 import NhCatalog, { type CatalogItem, type GalleryDetail, type ReadingRecord } from './NhCatalog';
 import NhAccount, { type AccountItem } from './NhAccount';
 import UnifiedShelf from './UnifiedShelf';
+import BackupSync, { type BackupData } from './BackupSync';
 
 function useSaved<T>(key:string,initial:T):[T,React.Dispatch<React.SetStateAction<T>>]{
   const [value,setValue]=useState<T>(()=>{try {const raw=localStorage.getItem(key);return raw?JSON.parse(raw) as T:initial;}catch{return initial;}});
@@ -90,6 +91,17 @@ function App(){
     }catch(e){window.alert('無法更新收藏：'+String(e));}
   }
   const [shelfRevision,setShelfRevision]=useState(0);
+  const [roumanRevision,setRoumanRevision]=useState(0);
+  function applyBackupImport(values:BackupData){
+    const data=<T,>(key:string):T|undefined => values[key as keyof BackupData] as T|undefined;
+    const f=data<CatalogItem[]>('mh-v05-nh-favorites');if(f)setNhFavorites(f);
+    const h=data<ReadingRecord[]>('mh-v05-nh-history');if(h)setNhHistory(h);
+    const p=data<Record<string,RoumanProgress>>('mangahub-rouman-page-progress-v062');if(p)setRoumanPages(p);
+    const tags=data<string[]>('mh-v055-local-blacklist');if(tags)setBlockedTags(tags);
+    // RoumanSource and UnifiedShelf have their own storage snapshots; remount
+    // after the merge so they read the new local data without losing it.
+    setRoumanRevision(x=>x+1);setShelfRevision(x=>x+1);
+  }
   function returnFromReader(){
     if(readerLeaving)return;
     const dest=readerOrigin??'catalog';
@@ -148,12 +160,12 @@ function App(){
       <button className={tab==='rouman'?'nav active':'nav'} onClick={()=>showTab('rouman')}><BookOpen size={19}/><span className="navText">Rouman5 探索</span></button>
       <button className={tab==='library'?'nav active':'nav'} onClick={()=>showTab('library')}><Library size={19}/><span className="navText">我的漫畫書架</span></button>
       <button className={tab==='account'?'nav active':'nav'} onClick={()=>showTab('account')}><UserRound size={19}/><span className="navText">帳號與同步</span></button>
-      <div className="asideFoot"><span className="footText">v0.6.7 · Local-first</span></div>
+      <div className="asideFoot"><span className="footText">v0.6.8 · Local-first</span></div>
     </aside>
     <main className="main"><header><span className="eyebrow">MangaHub / {tab==='catalog'?'nHentai':tab==='rouman'?'Rouman5':tab==='library'?'My Library':tab==='account'?'Account':'Reader'}</span><span className="status">● Local-first</span></header>
       <div className={tab==='catalog'?'catalogView':'catalogView is-hidden'}><NhCatalog adultConfirmed={adultConfirmed} showCovers={showCovers} onAdultChange={setAdultConfirmed} onCoversChange={setShowCovers} favorites={nhFavorites} onToggleFavorite={toggleNhFavorite} history={nhHistory} onClearHistory={()=>setNhHistory([])} onReadGallery={readNhGallery} onRepairHistoryCover={repairHistoryCover} blockedTags={blockedTags} onOpenComments={id=>{setAccountGalleryId(id);setTab('account');window.scrollTo(0,0);}}/></div>
-      <div className={tab==='rouman'?'sourceView':'sourceView is-hidden'}><RoumanSource active={tab==='rouman'} onRead={readRoumanChapter} nhHistory={nhHistory} onOpenNh={id=>void openNhId(id,'rouman')} pageProgress={roumanPages}/></div>
-      {tab==='library'&&<UnifiedShelf key={shelfRevision} nhFavorites={nhFavorites} nhHistory={nhHistory} roumanPages={roumanPages} onOpenNh={id=>void openNhId(id,'library')} onOpenRouman={url=>void openRoumanUrl(url)} onShowRouman={openRoumanBook} onRemoveNh={id=>setNhFavorites(p=>p.filter(x=>x.id!==id))} onRemoveRouman={removeRoumanFavorite}/>}
+      <div className={tab==='rouman'?'sourceView':'sourceView is-hidden'}><RoumanSource key={roumanRevision} active={tab==='rouman'} onRead={readRoumanChapter} nhHistory={nhHistory} onOpenNh={id=>void openNhId(id,'rouman')} pageProgress={roumanPages}/></div>
+      {tab==='library'&&<><BackupSync onImported={applyBackupImport}/><UnifiedShelf key={shelfRevision} nhFavorites={nhFavorites} nhHistory={nhHistory} roumanPages={roumanPages} onOpenNh={id=>void openNhId(id,'library')} onOpenRouman={url=>void openRoumanUrl(url)} onShowRouman={openRoumanBook} onRemoveNh={id=>setNhFavorites(p=>p.filter(x=>x.id!==id))} onRemoveRouman={removeRoumanFavorite}/></>}
       {tab==='account'&&<NhAccount onSyncFavorites={syncOfficialFavorites} onRemoteFavorite={handleRemoteFavorite} onOpenGallery={id=>void openNhId(id,'account')} onBlacklistUpdated={setBlockedTags} selectedGalleryId={accountGalleryId}/>}
       {tab==='reader'&&<Reader key={readerSession} initialUrls={readerUrls} initialPage={roumanReading?roumanPages[roumanPageKey(roumanReading)]?.page??1:undefined} progressKey={roumanReading?`rouman:${roumanPageKey(roumanReading)}`:undefined} onProgress={currentGallery?recordNhProgress:roumanReading?recordRoumanProgress:undefined} galleryTitle={currentGallery?.title??(roumanReading?`${roumanReading.bookTitle} · ${roumanReading.chapterTitle}`:undefined)} onBack={readerOrigin?returnFromReader:undefined} backLabel="返回上一頁" chapterNavigation={roumanReading&&roumanReading.chapterCount>0?{index:roumanReading.chapterIndex,count:roumanReading.chapterCount,onNavigate:navigateRoumanChapter}:undefined}/>}
     </main>
