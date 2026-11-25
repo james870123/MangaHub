@@ -57,18 +57,63 @@ function categoryTerm(filter: CategoryFilter): string {
 }
 
 
-// Explore-cover recovery is deliberately separate from favorites and reading history.
-// Read only gallery metadata when a visible cover is missing or has failed.
+// nHentai cover recovery V2: use bounded candidate URLs based on verified
+// gallery media IDs. Never query new APIs or accept arbitrary image domains.
 const nhCoverStoreKey = 'mangahub-nh-explore-covers-v067';
 const nhCoverStoreLimit = 250;
-function validNhCover(url: string): boolean {
+const nhCoverAttemptLimit = 12;
+const nhThumbHosts = ['t.nhentai.net', 't2.nhentai.net', 't1.nhentai.net', 't3.nhentai.net'];
+const nhCoverPath = /^\/galleries\/(\d+)\/(cover|thumb)\.(jpg|png|webp|avif)$/;
+
+function nhCoverParts(value: string): { url: string; mediaId: string; filename: string; host: string } | null {
   try {
-    const parsed = new URL(url);
-    return parsed.protocol === 'https:' && parsed.hostname === 't.nhentai.net'
-      && !parsed.port && !parsed.username && !parsed.password
-      && !parsed.search && !parsed.hash
-      && /^\/galleries\/\d+\/(?:cover|thumb)\.(?:jpg|png|webp|avif)$/.test(parsed.pathname);
-  } catch { return false; }
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:' || !/^t(?:[1-9])?\.nhentai\.net$/.test(parsed.hostname)
+      || parsed.port || parsed.username || parsed.password || parsed.search || parsed.hash) return null;
+    const match = parsed.pathname.match(nhCoverPath);
+    if (!match) return null;
+    return { url: parsed.href, mediaId: match[1], filename: `${match[2]}.${match[3]}`, host: parsed.hostname };
+  } catch { return null; }
+}
+function validNhCover(value: string): boolean { return nhCoverParts(value) !== null; }
+function mediaIdFromGallery(gallery: GalleryDetail): string | null {
+  // A genuine API page URL identifies the gallery's *media ID*, which is not
+  // necessarily equal to its numeric work/gallery ID.
+  for (const raw of gallery.pageUrls) {
+    try {
+      const u = new URL(raw);
+      const match = u.pathname.match(/^\/galleries\/(\d+)\/\d+\.(?:jpg|png|webp|gif|avif)$/);
+      if (u.protocol === 'https:' && u.hostname === 'i.nhentai.net' && match) return match[1];
+    } catch { /* ignore invalid metadata */ }
+  }
+  return null;
+}
+function nhCoverCandidates(urls: Array<string | null | undefined>, mediaId: string | null = null, limit = 7): string[] {
+  const results: string[] = [];
+  const add = (url: string) => {
+    if (validNhCover(url) && !results.includes(url) && results.length < limit) results.push(url);
+  };
+  const sources = urls.map(v => v ? nhCoverParts(v) : null).filter((v): v is NonNullable<typeof v> => !!v);
+  // Trust URLs returned by source metadata first, then bounded variations of
+  // the same verified media ID. Do not invent a media ID from the work ID.
+  sources.forEach(v => add(v.url));
+  const baseId = sources[0]?.mediaId ?? (mediaId && /^\d+$/.test(mediaId) ? mediaId : null);
+  if (!baseId) return results;
+  const original = sources[0];
+  const ext = original?.filename.split('.').pop() || 'jpg';
+  const primaryHost = original?.host ?? 't.nhentai.net';
+  const initialName = original?.filename ?? `cover.${ext}`;
+  const pairedName = initialName.startsWith('cover.') ? `thumb.${ext}` : `cover.${ext}`;
+  // Nearby variants are common in the public gallery metadata conventions.
+  add(`https://${primaryHost}/galleries/${baseId}/${pairedName}`);
+  for (const host of nhThumbHosts) add(`https://${host}/galleries/${baseId}/${initialName}`);
+  for (const host of nhThumbHosts) add(`https://${host}/galleries/${baseId}/${pairedName}`);
+  for (const alternateExt of ['webp', 'jpg', 'png']) {
+    if (alternateExt === ext) continue;
+    add(`https://${primaryHost}/galleries/${baseId}/cover.${alternateExt}`);
+    add(`https://${primaryHost}/galleries/${baseId}/thumb.${alternateExt}`);
+  }
+  return results;
 }
 function readNhCoverIndex(): Record<string, string> {
   try {
@@ -85,7 +130,7 @@ function rememberNhCover(id: number, url: string) {
   nhCoverIndex[id] = url;
   const keys = Object.keys(nhCoverIndex);
   for (const key of keys.slice(0, Math.max(0, keys.length - nhCoverStoreLimit))) delete nhCoverIndex[key];
-  try { localStorage.setItem(nhCoverStoreKey, JSON.stringify(nhCoverIndex)); } catch { /* storage is optional */ }
+  try { localStorage.setItem(nhCoverStoreKey, JSON.stringify(nhCoverIndex)); } catch { /* optional */ }
 }
 function forgetNhCover(id: number, url: string) {
   if (nhCoverIndex[id] !== url) return;
@@ -108,30 +153,28 @@ function queueNhCoverTask<T>(job: () => Promise<T>): Promise<T> {
     pumpNhCoverTasks();
   });
 }
-const nhCoverPending = new Map<number, Promise<string | null>>();
-function lookupNhCover(id: number): Promise<string | null> {
+const nhCoverPending = new Map<number, Promise<GalleryDetail>>();
+function lookupNhCoverGallery(id: number): Promise<GalleryDetail> {
   const inFlight = nhCoverPending.get(id);
   if (inFlight) return inFlight;
-  const promise = queueNhCoverTask(async () => {
-    const gallery = await invoke<GalleryDetail>('fetch_nh_gallery', { input: String(id) });
-    const cover = gallery.coverUrl ?? null;
-    return cover && validNhCover(cover) ? cover : null;
-  }).finally(() => { nhCoverPending.delete(id); });
+  const promise = queueNhCoverTask(() => invoke<GalleryDetail>('fetch_nh_gallery', { input: String(id) }))
+    .finally(() => { nhCoverPending.delete(id); });
   nhCoverPending.set(id, promise);
   return promise;
 }
 function NhCatalogCover({ item, enabled, onRecovered }: {
   item: CatalogItem; enabled: boolean; onRecovered: (id: number, url: string) => void;
 }) {
-  const [source, setSource] = useState<string | null>(() => nhCoverIndex[item.id] ?? item.coverUrl);
-  const [failed, setFailed] = useState<string | null>(null);
+  const [candidates, setCandidates] = useState<string[]>(() =>
+    nhCoverCandidates([nhCoverIndex[item.id], item.coverUrl]));
+  const [index, setIndex] = useState(0);
   const [visible, setVisible] = useState(false);
   const container = useRef<HTMLDivElement | null>(null);
-  const attempted = useRef(false);
+  const requestedDetail = useRef(false);
   useEffect(() => {
-    attempted.current = false;
-    setFailed(null);
-    setSource(nhCoverIndex[item.id] ?? item.coverUrl);
+    requestedDetail.current = false;
+    setCandidates(nhCoverCandidates([nhCoverIndex[item.id], item.coverUrl]));
+    setIndex(0);
     setVisible(false);
   }, [item.id, item.coverUrl]);
   useEffect(() => {
@@ -146,20 +189,24 @@ function NhCatalogCover({ item, enabled, onRecovered }: {
     return () => observer.disconnect();
   }, [enabled, item.id]);
   useEffect(() => {
-    if (!enabled || !visible || attempted.current || (source && failed !== source)) return;
-    attempted.current = true;
+    if (!enabled || !visible || index < candidates.length || requestedDetail.current) return;
+    requestedDetail.current = true;
     let cancelled = false;
-    void lookupNhCover(item.id).then(url => {
-      if (!cancelled && url && url !== failed) { setSource(url); setFailed(null); }
-    }).catch(() => { /* keep a visible fallback; don't retry automatically on 403/429 */ });
+    void lookupNhCoverGallery(item.id).then(gallery => {
+      if (cancelled) return;
+      const fromDetail = nhCoverCandidates([gallery.coverUrl], mediaIdFromGallery(gallery), nhCoverAttemptLimit);
+      // Never revisit candidates already rejected by the image element.
+      setCandidates(previous => [...previous, ...fromDetail.filter(url => !previous.includes(url))]
+        .slice(0, nhCoverAttemptLimit));
+    }).catch(() => { /* API 403/429: retain the placeholder, no repeated requests */ });
     return () => { cancelled = true; };
-  }, [enabled, visible, item.id, source, failed]);
-  const display = enabled && source && source !== failed && validNhCover(source) ? source : null;
+  }, [enabled, visible, item.id, candidates, index]);
+  const display = enabled && visible ? candidates[index] ?? null : null;
   return <div ref={container} className="catalogCover">
     <BookOpen size={32}/>
-    {display && <img src={display} alt="" loading="lazy" referrerPolicy="no-referrer"
+    {display && <img key={display} src={display} alt="" loading="lazy" referrerPolicy="no-referrer"
       onLoad={() => { rememberNhCover(item.id, display); onRecovered(item.id, display); }}
-      onError={() => { forgetNhCover(item.id, display); setFailed(display); }}/>}
+      onError={() => { forgetNhCover(item.id, display); setIndex(current => current + 1); }}/>} 
   </div>;
 }
 
