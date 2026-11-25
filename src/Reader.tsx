@@ -154,6 +154,87 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
   const scrollBaseline = useRef(0);
   const scrollTravel = useRef(0);
   const touchStart = useRef<{ x: number; y: number; at: number } | null>(null);
+  // v0.7.0: single-page touch zoom. Do not alter the verified vertical reader.
+  // This transforms the entire image slot, including Rouman5's repaired canvas.
+  const [mobileScale, setMobileScale] = useState(1);
+  const [mobilePan, setMobilePan] = useState({ x: 0, y: 0 });
+  const mobileScaleRef = useRef(1);
+  const mobilePanRef = useRef({ x: 0, y: 0 });
+  const zoomGesture = useRef<{ distance: number; scale: number } | null>(null);
+  const panGesture = useRef<{ x: number; y: number; initialX: number; initialY: number } | null>(null);
+  const touchWasMulti = useRef(false);
+  const suppressedTapUntil = useRef(0);
+  const lastTap = useRef<{ time: number; x: number; y: number } | null>(null);
+  const singleImageRef = useRef<HTMLDivElement>(null);
+  const clampScale = (n: number) => Math.max(1, Math.min(3, n));
+  const applyMobileScale = (next: number) => {
+    const scale = clampScale(next);
+    mobileScaleRef.current = scale;
+    setMobileScale(scale);
+    if (scale <= 1.001) { mobilePanRef.current = { x: 0, y: 0 }; setMobilePan({ x: 0, y: 0 }); }
+  };
+  const applyMobilePan = (x: number, y: number) => {
+    const element = singleImageRef.current;
+    if (!element) return;
+    const rect = element.getBoundingClientRect();
+    const maxX = Math.max(0, (rect.width * (mobileScaleRef.current - 1)) / 2);
+    const maxY = Math.max(0, (rect.height * (mobileScaleRef.current - 1)) / 2);
+    const next = { x: Math.max(-maxX, Math.min(maxX, x)), y: Math.max(-maxY, Math.min(maxY, y)) };
+    mobilePanRef.current = next;
+    setMobilePan(next);
+  };
+  const touchDistance = (a: React.Touch, b: React.Touch) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  const onZoomTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (!isMobileReader()) return;
+    if (event.touches.length >= 2) {
+      touchWasMulti.current = true;
+      zoomGesture.current = { distance: Math.max(1, touchDistance(event.touches[0], event.touches[1])), scale: mobileScaleRef.current };
+      panGesture.current = null;
+      touchStart.current = null;
+      edgeTouch.current = null;
+    } else if (event.touches.length === 1 && mobileScaleRef.current > 1) {
+      const t = event.touches[0];
+      panGesture.current = { x: t.clientX, y: t.clientY, initialX: mobilePanRef.current.x, initialY: mobilePanRef.current.y };
+      touchStart.current = null;
+      edgeTouch.current = null;
+    }
+  };
+  const onZoomTouchMove = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (!isMobileReader()) return;
+    if (event.touches.length >= 2 && zoomGesture.current) {
+      event.preventDefault();
+      applyMobileScale(zoomGesture.current.scale * touchDistance(event.touches[0], event.touches[1]) / zoomGesture.current.distance);
+      return;
+    }
+    if (event.touches.length === 1 && panGesture.current && mobileScaleRef.current > 1) {
+      event.preventDefault();
+      const t = event.touches[0];
+      applyMobilePan(panGesture.current.initialX + t.clientX - panGesture.current.x, panGesture.current.initialY + t.clientY - panGesture.current.y);
+    }
+  };
+  const onZoomTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (!isMobileReader()) return;
+    if (zoomGesture.current || touchWasMulti.current || panGesture.current) {
+      suppressedTapUntil.current = Date.now() + 450;
+      touchStart.current = null;
+    }
+    if (event.touches.length < 2) zoomGesture.current = null;
+    if (event.touches.length === 0) {
+      touchWasMulti.current = false;
+      panGesture.current = null;
+    }
+    // Two fast taps to toggle readable image magnification. No double-tap in vertical mode.
+    if (event.touches.length === 0 && event.changedTouches.length === 1 && Date.now() > suppressedTapUntil.current) {
+      const t = event.changedTouches[0];
+      const last = lastTap.current;
+      if (last && Date.now() - last.time < 330 && Math.hypot(t.clientX-last.x, t.clientY-last.y) < 36) {
+        applyMobileScale(mobileScaleRef.current > 1 ? 1 : 2);
+        lastTap.current = null;
+        suppressedTapUntil.current = Date.now() + 400;
+      } else lastTap.current = { time: Date.now(), x: t.clientX, y: t.clientY };
+    }
+  };
+
   const [cacheLimitMb, setCacheLimitMb] = useState(() => { const n = Number(safeRead(STORAGE_CACHE_LIMIT, '0')); return [0, 500, 1024, 2048].includes(n) ? n : 0; });
   const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
   const [cacheMessage, setCacheMessage] = useState('');
@@ -276,7 +357,7 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
     window.addEventListener('scroll', onScrollChrome, { passive: true });
     return () => window.removeEventListener('scroll', onScrollChrome);
   }, [mode]);
-  const isMobileReader = () => window.matchMedia('(max-width: 750px)').matches;
+  const isMobileReader = () => window.matchMedia('(max-width: 750px), (max-width: 950px) and (orientation: landscape) and (pointer: coarse)').matches;
   const onReaderTouchStart = (event: React.TouchEvent<HTMLElement>) => {
     if (!onBack || !isMobileReader() || event.touches.length !== 1) { edgeTouch.current = null; return; }
     const touch = event.touches[0];
@@ -298,7 +379,7 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
     }
   };
   const onReadingSurfaceTap = (event: React.MouseEvent<HTMLElement>) => {
-    if (!isMobileReader()) return;
+    if (!isMobileReader() || Date.now() < suppressedTapUntil.current) return;
     if ((event.target as HTMLElement).closest('button, a, input, select, textarea')) return;
     if (focusMode) { setFocusMode(false); setDockVisible(true); }
     else setDockVisible(show => !show);
@@ -343,17 +424,26 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
     });
     return () => { for (const img of pending) img.src = ''; };
   }, [page, mode, sources]);
+  useEffect(() => {
+    // A new page should never inherit zoom/pan from the previous image.
+    mobileScaleRef.current = 1;
+    mobilePanRef.current = { x: 0, y: 0 };
+    setMobileScale(1);
+    setMobilePan({ x: 0, y: 0 });
+    zoomGesture.current = null;
+    panGesture.current = null;
+  }, [page, mode, sessionKey]);
   const current = Math.min(page, Math.max(0, sources.length - 1));
   // Touch navigation only applies to single-page mode. Vertical scrolling is never intercepted.
   const onSingleTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
-    if (event.touches.length !== 1) { touchStart.current = null; return; }
+    if (event.touches.length !== 1 || mobileScaleRef.current > 1 || touchWasMulti.current) { touchStart.current = null; return; }
     const touch = event.touches[0];
     touchStart.current = { x: touch.clientX, y: touch.clientY, at: Date.now() };
   };
   const onSingleTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
     const origin = touchStart.current;
     touchStart.current = null;
-    if (!origin || event.changedTouches.length !== 1 || mode === 'vertical') return;
+    if (!origin || event.changedTouches.length !== 1 || mode === 'vertical' || mobileScaleRef.current > 1 || touchWasMulti.current || Date.now() < suppressedTapUntil.current) return;
     const target = event.target as HTMLElement;
     if (target.closest('button, input, select, textarea, a')) return;
     const touch = event.changedTouches[0];
@@ -406,7 +496,8 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
     {sources.length > 0 && <div className="mh-reader-focus-toggle"><button className="toggle" onClick={toggleFocus} aria-pressed={focusMode}>{focusMode ? '顯示閱讀設定' : '專注閱讀（收合設定）'}</button></div>}
     {sources.length > 0 && <div className="mh-reader-settings">
       <label>縮放 <input type="range" min="60" max="150" step="10" value={zoom} onChange={e => setZoom(Number(e.target.value))}/> {zoom}%</label>
-      <button className="toggle" onClick={() => setZoom(100)}><ZoomOut size={14}/> 重設</button>
+      <button className="toggle" onClick={() => { setZoom(100); applyMobileScale(1); }}><ZoomOut size={14}/> 重設</button>
+      {mode !== 'vertical' && <span className="mh-touch-zoom-hint">iPhone：雙指縮放、拖動查看、雙擊放大／還原</span>}
       {localPages.length > 0 && <button className="toggle" onClick={clearLocal}><Trash2 size={14}/> 清除本機圖片</button>}
     </div>}
     {sources.length > 0 && <div className="mh-reader-cache-settings">
@@ -429,7 +520,10 @@ export default function Reader({ initialUrls, initialPage, progressKey, onProgre
           <span>{current + 1} / {sources.length}</span>
           <button disabled={current === sources.length - 1} onClick={() => goTo(current + 1)}>下一頁 <ChevronRight size={16}/></button>
         </div>
-        <div className="mh-single-image" onClick={onReadingSurfaceTap} style={{ '--single-zoom': `${zoom}%` } as React.CSSProperties}>
+        <div ref={singleImageRef} className={`mh-single-image${mobileScale > 1.001 ? ' mh-zoomed' : ''}`}
+          onTouchStart={onZoomTouchStart} onTouchMove={onZoomTouchMove} onTouchEnd={onZoomTouchEnd}
+          onClick={onReadingSurfaceTap}
+          style={{ '--single-zoom': `${zoom}%`, '--mh-pinch-scale': mobileScale, '--mh-pan-x': `${mobilePan.x}px`, '--mh-pan-y': `${mobilePan.y}px` } as React.CSSProperties}>
           <ReaderImage key={`${current}-${sources[current].url}`} src={sources[current].url} index={current} eager cacheLimitMb={cacheLimitMb} />
         </div>
         <p className="mh-help">方向鍵可翻頁（右至左模式會反轉方向）。圖片若因來源站限制無法直接載入，請使用合法提供的圖片檔案。</p>

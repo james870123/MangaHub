@@ -422,3 +422,44 @@ button, input, select, textarea { touch-action: manipulation; }
 .mh-backup-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px}.mh-backup-grid>div{display:flex;justify-content:space-between;gap:12px;padding:9px;background:#292332;border-radius:7px;font-size:.85rem}
 .mh-backup-error{color:#ffa8a8!important}.mh-backup-success{color:#a5e0b5!important}
 @media(max-width:750px){.mh-backup-panel{margin:12px 4% 8px;padding:16px}.mh-backup-actions button{flex:1;justify-content:center}}
+
+/* v0.7.0: iPhone touch magnification, compact landscape UI.
+   Image transforms operate on the entire slot (img + repaired Canvas) so
+   Rouman5 strip reconstruction remains pixel-aligned. Desktop unaffected. */
+.mh-touch-zoom-hint { color:#9fa5b4; font-size:11px; }
+@media (max-width:750px) {
+  .mh-single-image { position:relative; width:100% !important; max-width:none; overflow:hidden; touch-action:pan-y pinch-zoom; overscroll-behavior:contain; }
+  .mh-single-image.mh-zoomed { touch-action:none; }
+  .mh-single-image > .mh-image-slot { transform:translate3d(var(--mh-pan-x,0px),var(--mh-pan-y,0px),0) scale(var(--mh-pinch-scale,1)); transform-origin:center center; }
+  .mh-single-image .mh-image-slot { width:100%; }
+  .mh-single-image .mh-image-slot > img { user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
+}
+@media (max-width:950px) and (orientation:landscape) and (pointer:coarse) {
+  .reader-active .readerContent { padding-top:calc(4px + var(--mh-safe-top)); padding-bottom:calc(60px + var(--mh-safe-bottom)); }
+  .reader-active .readerContent.reader-focus { padding:0 max(0px,var(--mh-safe-right)) var(--mh-safe-bottom) max(0px,var(--mh-safe-left)) !important; }
+  .mh-single-reader .mh-single-image .mh-image-slot > img { max-height:calc(100dvh - 76px - var(--mh-safe-top) - var(--mh-safe-bottom)); }
+  .reader-focus .mh-single-reader .mh-single-image .mh-image-slot > img { max-height:calc(100dvh - var(--mh-safe-top) - var(--mh-safe-bottom)); }
+  .mh-mobile-reader-dock { min-height:48px; padding-top:3px; padding-bottom:calc(3px + var(--mh-safe-bottom)); }
+  .mh-mobile-reader-dock button { min-height:40px; }
+  .readerContent .readerTools { margin:8px 0; }
+  .readerContent .readerGalleryTitle { margin-bottom:6px; }
+}
+@media (prefers-reduced-motion:reduce) {
+  .mh-single-image > .mh-image-slot { transition:none !important; }
+}
+
+/* Landscape phones sometimes exceed the old 750px mobile breakpoint. */
+@media (min-width:751px) and (max-width:950px) and (orientation:landscape) and (pointer:coarse) {
+  .reader-active .sidebar, .reader-active.sidebar-collapsed .sidebar { display:none !important; }
+  .reader-active .main > header { display:none; }
+  .reader-active .readerContent { width:100%; max-width:none; padding:calc(4px + var(--mh-safe-top)) max(8px,var(--mh-safe-right)) calc(55px + var(--mh-safe-bottom)) max(8px,var(--mh-safe-left)); }
+  .reader-active .readerContent.reader-focus { padding:0 0 var(--mh-safe-bottom) !important; }
+  .reader-active .mh-single-image { width:100% !important; max-width:none; overflow:hidden; touch-action:pan-y pinch-zoom; }
+  .reader-active .mh-single-image.mh-zoomed { touch-action:none; }
+  .reader-active .mh-single-image > .mh-image-slot { transform:translate3d(var(--mh-pan-x,0px),var(--mh-pan-y,0px),0) scale(var(--mh-pinch-scale,1)); transform-origin:center center; }
+  .reader-active .mh-mobile-reader-dock { display:flex; }
+  .reader-active .reader-dock-hidden .mh-mobile-reader-dock, .reader-active .reader-focus .mh-mobile-reader-dock { transform:translate3d(0,110%,0); opacity:0; visibility:hidden; pointer-events:none; }
+  .reader-active .readerContent.reader-focus > .readerReturnBar,
+  .reader-active .readerContent.reader-focus > .readerTools,
+  .reader-active .readerContent.reader-focus > .mh-reader-focus-toggle { display:none; }
+}
