@@ -162,21 +162,31 @@ function lookupNhCoverGallery(id: number): Promise<GalleryDetail> {
   nhCoverPending.set(id, promise);
   return promise;
 }
-function NhCatalogCover({ item, enabled, onRecovered }: {
-  item: CatalogItem; enabled: boolean; onRecovered: (id: number, url: string) => void;
+function NhCatalogCover({ item, enabled, onRecovered, confirmedCover }: {
+  item: CatalogItem;
+  enabled: boolean;
+  onRecovered: (id: number, url: string) => void;
+  confirmedCover?: { url: string; revision: number };
 }) {
   const [candidates, setCandidates] = useState<string[]>(() =>
-    nhCoverCandidates([nhCoverIndex[item.id], item.coverUrl]));
+    nhCoverCandidates([confirmedCover?.url, nhCoverIndex[item.id], item.coverUrl]));
   const [index, setIndex] = useState(0);
   const [visible, setVisible] = useState(false);
   const container = useRef<HTMLDivElement | null>(null);
   const requestedDetail = useRef(false);
+  // Keep the IntersectionObserver visibility state when the cover URL changes.
+  // Once visible, the observer disconnects. Resetting visibility on URL updates
+  // would permanently strand the card on its placeholder.
   useEffect(() => {
     requestedDetail.current = false;
-    setCandidates(nhCoverCandidates([nhCoverIndex[item.id], item.coverUrl]));
-    setIndex(0);
     setVisible(false);
-  }, [item.id, item.coverUrl]);
+  }, [item.id]);
+  useEffect(() => {
+    // Retry candidates after the modal confirms a working image, even if the
+    // URL is the same as one previously attempted by this card.
+    setCandidates(nhCoverCandidates([confirmedCover?.url, nhCoverIndex[item.id], item.coverUrl]));
+    setIndex(0);
+  }, [item.id, item.coverUrl, confirmedCover?.url, confirmedCover?.revision]);
   useEffect(() => {
     if (!enabled) return;
     const element = container.current;
@@ -204,7 +214,7 @@ function NhCatalogCover({ item, enabled, onRecovered }: {
   const display = enabled && visible ? candidates[index] ?? null : null;
   return <div ref={container} className="catalogCover">
     <BookOpen size={32}/>
-    {display && <img key={display} src={display} alt="" loading="lazy" referrerPolicy="no-referrer"
+    {display && <img key={`${display}|${confirmedCover?.revision ?? 0}`} src={display} alt="" loading="lazy" referrerPolicy="no-referrer"
       onLoad={() => { rememberNhCover(item.id, display); onRecovered(item.id, display); }}
       onError={() => { forgetNhCover(item.id, display); setIndex(current => current + 1); }}/>} 
   </div>;
@@ -226,6 +236,10 @@ export default function NhCatalog(props: Props) {
   const [selection, setSelection] = useState<CatalogItem | null>(null);
   const [refresh, setRefresh] = useState(0);
   const [coverOverrides, setCoverOverrides] = useState<Record<number, string>>({});
+  // Only an actual image onLoad can confirm that the detail URL works in WebView.
+  // URL metadata alone is not proof; cards can otherwise exhaust their fallback
+  // candidates and stay on the placeholder even while the modal image displays.
+  const [confirmedDetailCovers, setConfirmedDetailCovers] = useState<Record<number, { url: string; revision: number }>>({});
   const [related, setRelated] = useState<CatalogItem[]>([]);
   const [relatedError, setRelatedError] = useState('');
   const [relatedLoading, setRelatedLoading] = useState(false);
@@ -340,6 +354,17 @@ export default function NhCatalog(props: Props) {
     setCoverOverrides(prev => prev[id] === url ? prev : { ...prev, [id]: url });
     onRepairHistoryCover(id, url);
   }, [onRepairHistoryCover]);
+  const confirmDetailCover = useCallback((id: number, url: string) => {
+    if (!validNhCover(url)) return;
+    rememberNhCover(id, url);
+    // Even if the URL is identical, force a fresh card image element after the
+    // modal has demonstrated it can load. Avoid unbounded state for other IDs.
+    setConfirmedDetailCovers(prev => ({
+      ...prev,
+      [id]: { url, revision: (prev[id]?.revision ?? 0) + 1 },
+    }));
+    recordRecoveredCover(id, url);
+  }, [recordRecoveredCover]);
   const visibleItems = (mode === 'favorites' ? favorites : mode === 'history' ? history.map(infoForRecord) : (result?.items ?? [])).map(item => coverOverrides[item.id] ? { ...item, coverUrl: coverOverrides[item.id] } : item);
   const excluded = blockedTags.map(x=>x.toLowerCase().trim()).filter(Boolean);
   const filteredItems = visibleItems.filter(item=>!item.tags.some(tag=>excluded.some(b=>tag.toLowerCase()===b)));
@@ -422,7 +447,8 @@ export default function NhCatalog(props: Props) {
     {blockedTags.length>0 && <p className="catalogBlockedNotice">已啟用 {blockedTags.length} 個黑名單標籤（僅篩選 API 已提供標籤的作品）</p>}
     <div className="catalogGrid">{filteredItems.map(item => <article key={item.id} className="catalogCard">
       <button className="catalogCardMain" onClick={() => void openDetail(item)} aria-label={`查看 ${item.title}`}>
-        <NhCatalogCover item={item} enabled={showCovers} onRecovered={recordRecoveredCover}/>
+        <NhCatalogCover item={item} enabled={showCovers} onRecovered={recordRecoveredCover}
+          confirmedCover={confirmedDetailCovers[item.id]}/>
         <div className="catalogCardText"><strong title={item.title}>{item.title}</strong><small>#{item.id} · {item.pageCount || '—'} 頁</small>{mode === 'history' && <small><Clock3 size={12}/> 上次第 {history.find(r => r.id === item.id)?.page ?? 1} 頁</small>}{mode === 'history' && !item.coverUrl && <small>封面未儲存，點此更新資料</small>}</div>
       </button>
       <button className="catalogHeart" aria-label={favorites.some(f => f.id === item.id) ? '取消收藏' : '收藏'} onClick={() => onToggleFavorite(item)}><Heart size={18} fill={favorites.some(f => f.id === item.id) ? 'currentColor' : 'none'}/></button>
@@ -440,7 +466,9 @@ export default function NhCatalog(props: Props) {
       <section className="catalogModal" role="dialog" aria-modal="true" aria-label="漫畫詳情" onClick={e => e.stopPropagation()}>
         <button className="catalogClose" onClick={() => setSelection(null)} aria-label="關閉">×</button>
         <div className="pill muted">GALLERY · {selection.id}</div><h2>{detail?.title || selection.title}</h2>
-        <div className="catalogDetailRow"><div className="catalogDetailCover">{showCovers && (detail?.coverUrl || selection.coverUrl) ? <img src={(detail?.coverUrl || selection.coverUrl)!} alt="作品封面" referrerPolicy="no-referrer"/> : <BookOpen size={44}/>}</div>
+        <div className="catalogDetailRow"><div className="catalogDetailCover">{showCovers && (detail?.coverUrl || selection.coverUrl) ? <img src={(detail?.coverUrl || selection.coverUrl)!} alt="作品封面" referrerPolicy="no-referrer"
+          onLoad={e => { const url = e.currentTarget.currentSrc || e.currentTarget.src;
+            confirmDetailCover(selection.id, url); }}/> : <BookOpen size={44}/>}</div>
           <div className="catalogDetailInfo"><p>頁數：{detail?.pageUrls.length ?? selection.pageCount ?? '—'}</p><p>作品 ID：{selection.id}</p>
             <div className="catalogTags">{(detail?.tags?.length ? detail.tags : selection.tags).map(tag => <button key={tag} title="搜尋此標籤" onClick={() => searchTag(tag)}>{tag}</button>)}</div>
             <button className="secondaryButton" onClick={() => onToggleFavorite(selection)}><Bookmark size={17}/> {selected ? '取消收藏' : '加入收藏'}</button>
